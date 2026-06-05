@@ -2,3 +2,4 @@ LIBRARY ntdll.dll
 EXPORTS
     NtGetNextThread
     vDbgPrintEx
+    RtlProcessHeap

@@ -3,61 +3,78 @@
 // Replaces <windows.h> across the mhook library. The only DLL dependency
 // introduced here is ntdll.dll.
 //
+// Include chain: <winnt.h> only — avoids pulling in the full Win32 surface
+// so that IDE IntelliSense does not offer kernel32/user32/etc. APIs.
+// winnt.h's own dependencies (ctype.h, winapifamily.h, basetsd.h, specstrings.h
+// etc.) do not pull in ntdef.h, so there are no struct redefinition conflicts.
+//
 
 #ifndef NT_DEFS_H
 #define NT_DEFS_H
 
 //
-// Pull in basic Windows types (CONTEXT, LARGE_INTEGER, ACCESS_MASK, MEM_*/PAGE_*
-// constants, LDT_ENTRY, RTL_CRITICAL_SECTION, etc.).  <winnt.h> is pure type
-// definitions — it adds zero import-library dependencies of its own.
+// winnt.h checks for _AMD64_ / _X86_ / _ARM64_ / _ARM_ rather than the
+// compiler's predefined _M_xxx macros.  Bridge them here.
 //
-#include <winnt.h>
+#if defined(_M_AMD64) && !defined(_AMD64_)
+#define _AMD64_
+#elif defined(_M_IX86) && !defined(_X86_)
+#define _X86_
+#elif defined(_M_ARM64) && !defined(_ARM64_)
+#define _ARM64_
+#elif defined(_M_ARM) && !defined(_ARM_)
+#define _ARM_
+#endif
 
 //
-// va_list support (compiler-intrinsic header, no DLL dependency).
+// minwindef.h + winnt.h: provides CONST, BOOL, BYTE, WORD, DWORD, CONTEXT,
+// LARGE_INTEGER, ACCESS_MASK, LDT_ENTRY, RTL_CRITICAL_SECTION,
+// MEMORY_BASIC_INFORMATION, MEM_*/PAGE_* constants, RtlZeroMemory, etc.
 //
-#include <vadefs.h>
+// Save and reset packing before including these headers.  cpu.h wraps its
+// own content in #pragma pack(push,1) and includes nt_defs.h from within
+// that block; without this guard, winnt.h would be processed with pack=1
+// active, breaking the alignment of LARGE_INTEGER and other types.
+//
+#pragma pack(push)
+#pragma pack()
+#include <minwindef.h>
+#include <winnt.h>
+#pragma pack(pop)
+
+//
+// va_list (compiler-intrinsic header, no DLL dependency).
+//
 #include <stdarg.h>
 
 //
-// String/memory intrinsics.  In release builds (/Oi) these become compiler
-// intrinsics with no DLL dependency.  Debug builds may reference UCRTBASE but
-// never kernel32.
+// memset/memcpy: release builds use /Oi intrinsics (no DLL import).
+// Debug builds may reference UCRTBASE but never kernel32.
 //
 #include <string.h>
 
 //
-// INVALID_HANDLE_VALUE is normally in winbase.h (not winnt.h).
+// INVALID_HANDLE_VALUE is in handleapi.h (not winnt.h).
 //
 #ifndef INVALID_HANDLE_VALUE
 #define INVALID_HANDLE_VALUE ((HANDLE)(LONG_PTR)-1)
 #endif
 
 // ---------------------------------------------------------------------------
-// Basic NT types  (winnt.h already provides NTSTATUS, KPRIORITY, PBOOLEAN,
-// PCSZ — guard everything to avoid redefinition errors)
+// Pseudo-handles
+// ---------------------------------------------------------------------------
+
+#define NtCurrentProcess()  ((HANDLE)(LONG_PTR)-1)
+#define NtCurrentThread()   ((HANDLE)(LONG_PTR)-2)
+
+// ---------------------------------------------------------------------------
+// NTSTATUS  (winnt.h does not define it; that lives in ntdef.h)
 // ---------------------------------------------------------------------------
 
 #ifndef __NTSTATUS_DEFINED
 #define __NTSTATUS_DEFINED
 typedef _Return_type_success_(return >= 0) LONG NTSTATUS;
-#endif
-
-#ifndef PNTSTATUS
 typedef NTSTATUS *PNTSTATUS;
-#endif
-
-// KPRIORITY is in ntdef.h / winnt.h on Windows 10 SDK — guard it
-#ifndef _KPRIORITY_DEFINED
-#define _KPRIORITY_DEFINED
-typedef LONG KPRIORITY;
-#endif
-
-// PCSZ is in winnt.h — guard it
-#ifndef _PCSZ_DEFINED
-#define _PCSZ_DEFINED
-typedef CONST char *PCSZ;
 #endif
 
 #ifndef NT_SUCCESS
@@ -68,30 +85,74 @@ typedef CONST char *PCSZ;
 #define STATUS_NOT_IMPLEMENTED  ((NTSTATUS)0xC0000002L)
 #endif
 
-// Pseudo-handles
-#define NtCurrentProcess()  ((HANDLE)(LONG_PTR)-1)
-#define NtCurrentThread()   ((HANDLE)(LONG_PTR)-2)
-
 // ---------------------------------------------------------------------------
-// CLIENT_ID and TEB (minimal — only fields we access)
+// UNICODE_STRING / OBJECT_ATTRIBUTES  (ntdef.h, not winnt.h)
 // ---------------------------------------------------------------------------
 
+#ifndef _UNICODE_STRING_DEFINED
+#define _UNICODE_STRING_DEFINED
+typedef struct _UNICODE_STRING {
+    USHORT Length;
+    USHORT MaximumLength;
+    PWSTR  Buffer;
+} UNICODE_STRING, *PUNICODE_STRING;
+typedef const UNICODE_STRING *PCUNICODE_STRING;
+#endif
+
+#ifndef _OBJECT_ATTRIBUTES_DEFINED
+#define _OBJECT_ATTRIBUTES_DEFINED
+typedef struct _OBJECT_ATTRIBUTES {
+    ULONG           Length;
+    HANDLE          RootDirectory;
+    PUNICODE_STRING ObjectName;
+    ULONG           Attributes;
+    PVOID           SecurityDescriptor;
+    PVOID           SecurityQualityOfService;
+} OBJECT_ATTRIBUTES, *POBJECT_ATTRIBUTES;
+#endif
+
+// ---------------------------------------------------------------------------
+// CLIENT_ID  (ntdef.h, not winnt.h)
+// ---------------------------------------------------------------------------
+
+#ifndef _CLIENT_ID_DEFINED
+#define _CLIENT_ID_DEFINED
 typedef struct _CLIENT_ID {
     HANDLE UniqueProcess;
     HANDLE UniqueThread;
 } CLIENT_ID, *PCLIENT_ID;
+#endif
 
+// ---------------------------------------------------------------------------
+// KPRIORITY  (ntdef.h, not winnt.h)
+// ---------------------------------------------------------------------------
+
+#ifndef _KPRIORITY_DEFINED
+#define _KPRIORITY_DEFINED
+typedef LONG KPRIORITY;
+#endif
+
+// ---------------------------------------------------------------------------
+// PCSZ  (ntdef.h, not winnt.h — used in RtlCharToInteger)
+// ---------------------------------------------------------------------------
+
+#ifndef _PCSZ_DEFINED
+#define _PCSZ_DEFINED
+typedef CONST char *PCSZ;
+#endif
+
+// ---------------------------------------------------------------------------
+// Thread Environment Block — minimal layout to reach ClientId
 //
-// NtCurrentTeb() — return pointer to the Thread Environment Block.
-// The TEB address lives at GS:[0x30] on x64 and FS:[0x18] on x86.
-// We only need ClientId (offset 0x40 on x64, 0x20 on x86), so define a
-// minimal layout sufficient to reach it.
-//
+// x64: NT_TIB (0x38) + EnvironmentPointer (0x08) → ClientId at 0x40
+// x86: NT_TIB (0x1C) + EnvironmentPointer (0x04) → ClientId at 0x20
+// ---------------------------------------------------------------------------
+
 typedef struct _NT_TEB_MINIMAL {
 #ifdef _M_X64
-    BYTE        Reserved1[0x40];    // NT_TIB (0x38) + EnvironmentPointer (0x8) = 0x40
+    BYTE        Reserved1[0x40];
 #else
-    BYTE        Reserved1[0x20];    // NT_TIB (0x1C) + EnvironmentPointer (0x4) = 0x20
+    BYTE        Reserved1[0x20];
 #endif
     CLIENT_ID   ClientId;
 } NT_TEB_MINIMAL;
@@ -105,19 +166,6 @@ FORCEINLINE NT_TEB_MINIMAL* NtCurrentTeb_nt(void) {
 }
 
 #define NtCurrentClientId() (NtCurrentTeb_nt()->ClientId)
-
-// ---------------------------------------------------------------------------
-// OBJECT_ATTRIBUTES (needed for NtOpenThread prototype)
-// ---------------------------------------------------------------------------
-
-typedef struct _OBJECT_ATTRIBUTES {
-    ULONG           Length;
-    HANDLE          RootDirectory;
-    PUNICODE_STRING ObjectName;
-    ULONG           Attributes;
-    PVOID           SecurityDescriptor;
-    PVOID           SecurityQualityOfService;
-} OBJECT_ATTRIBUTES, *POBJECT_ATTRIBUTES;
 
 // ---------------------------------------------------------------------------
 // Information class enumerations
@@ -172,20 +220,12 @@ typedef struct _DESCRIPTOR_TABLE_ENTRY {
 } DESCRIPTOR_TABLE_ENTRY, *PDESCRIPTOR_TABLE_ENTRY;
 
 // ---------------------------------------------------------------------------
-// NT memory constants not in winnt.h
-// ---------------------------------------------------------------------------
-
-#ifndef HEAP_ZERO_MEMORY
-#define HEAP_ZERO_MEMORY    0x00000008UL
-#endif
-
-// ---------------------------------------------------------------------------
 // Debug output constants
 // ---------------------------------------------------------------------------
 
-#define DPFLTR_DEFAULT_ID           0UL
-#define DPFLTR_INFO_LEVEL           3UL
-#define THREAD_PRIORITY_TIME_CRITICAL  15
+#define DPFLTR_DEFAULT_ID               0UL
+#define DPFLTR_INFO_LEVEL               3UL
+#define THREAD_PRIORITY_TIME_CRITICAL   15
 
 // ---------------------------------------------------------------------------
 // Assert replacement — no CRT dependency

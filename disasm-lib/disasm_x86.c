@@ -2518,7 +2518,7 @@ abort:
 		__try { DumpAsBytes(stdout, Instruction->Address, (ULONG_PTR)VIRTUAL_ADDRESS, 16, TRUE); }
 		__except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {}
 #endif
-		fflush(stdout);
+		/* fflush(stdout) removed: output goes to DbgPrint, not stdout */
 	}
 	return FALSE;
 }
@@ -4104,7 +4104,7 @@ abort:
 		__try { DumpAsBytes(stdout, Instruction->Address, (ULONG_PTR)VIRTUAL_ADDRESS, 16, TRUE); }
 		__except (GetExceptionCode() == EXCEPTION_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH) {}
 #endif
-		fflush(stdout);
+		/* fflush(stdout) removed: output goes to DbgPrint, not stdout */
 	}
 	return NULL;
 }
@@ -4545,7 +4545,7 @@ INTERNAL U8 *SetSIB(INSTRUCTION *Instruction, U8 *Address, INSTRUCTION_OPERAND *
 				X86Instruction->IndexRegister = X86_32BIT_OFFSET + rex_sib.index;
 				break;
 			default:
-				fflush(stdout);
+				/* fflush(stdout) removed: output goes to DbgPrint, not stdout */
 				MHOOK_ASSERT(0);
 				return NULL;
 		}

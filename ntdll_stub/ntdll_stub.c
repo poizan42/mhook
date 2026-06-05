@@ -27,3 +27,8 @@ ULONG __cdecl vDbgPrintEx(
     (void)ComponentId; (void)Level; (void)Format; (void)arglist;
     return 0;
 }
+
+PVOID NTAPI RtlProcessHeap(void)
+{
+    return NULL;
+}
