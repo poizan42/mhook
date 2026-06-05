@@ -32,3 +32,4 @@ PVOID NTAPI RtlProcessHeap(void)
 {
     return NULL;
 }
+

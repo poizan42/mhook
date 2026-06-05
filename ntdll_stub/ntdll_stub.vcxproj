@@ -125,10 +125,10 @@
   <PropertyGroup Condition="'$(Platform)'=='Win32'">
     <OutDir>$(SolutionDir)$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(Platform)\$(Configuration)\</IntDir>
-    <TargetName>ntdll</TargetName>
+    <TargetName>ntdll_imports</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Platform)'=='x64'">
-    <TargetName>ntdll</TargetName>
+    <TargetName>ntdll_imports</TargetName>
   </PropertyGroup>
 
   <!-- Compiler: no optimisation needed (stub never runs), omit default libs -->
