@@ -2,7 +2,6 @@ LIBRARY ntdll.dll
 EXPORTS
     NtGetNextThread
     vDbgPrintEx
-    RtlProcessHeap
     _snprintf
     _vsnprintf
     memset

@@ -142,30 +142,76 @@ typedef CONST char *PCSZ;
 #endif
 
 // ---------------------------------------------------------------------------
-// Thread Environment Block — minimal layout to reach ClientId
+// Process Environment Block — fields up to and including ProcessHeap.
 //
-// x64: NT_TIB (0x38) + EnvironmentPointer (0x08) → ClientId at 0x40
-// x86: NT_TIB (0x1C) + EnvironmentPointer (0x04) → ClientId at 0x20
+// Layout (phnt ntpebteb.h):
+//   BOOLEAN[4] + implicit pad → HANDLE Mutant → PVOID×4 → PVOID ProcessHeap
+//
+// Offsets verified against ntpebteb.h:
+//   x64: ProcessHeap at 0x30  (4×BOOLEAN + 4-byte pad + HANDLE(8) + 4×PVOID(8))
+//   x86: ProcessHeap at 0x18  (4×BOOLEAN        + HANDLE(4) + 4×PVOID(4))
+// ---------------------------------------------------------------------------
+
+typedef struct _NT_PEB {
+    BOOLEAN InheritedAddressSpace;
+    BOOLEAN ReadImageFileExecOptions;
+    BOOLEAN BeingDebugged;
+    BOOLEAN BitField;
+    // Implicit 4-byte pad on x64 aligns Mutant to an 8-byte boundary.
+    HANDLE  Mutant;
+    PVOID   ImageBaseAddress;
+    PVOID   Ldr;
+    PVOID   ProcessParameters;
+    PVOID   SubSystemData;
+    PVOID   ProcessHeap;
+} NT_PEB, *PNT_PEB;
+
+// ---------------------------------------------------------------------------
+// Thread Environment Block — fields up to and including ProcessEnvironmentBlock.
+//
+// Layout (phnt ntpebteb.h):
+//   NT_TIB + EnvironmentPointer → ClientId → ActiveRpcHandle →
+//   ThreadLocalStoragePointer → ProcessEnvironmentBlock
+//
+// x64: NT_TIB=0x38, EnvironmentPointer=0x08 → ClientId@0x40
+//      ClientId=0x10 → ActiveRpcHandle@0x50 → TLS@0x58 → PEB*@0x60
+// x86: NT_TIB=0x1C, EnvironmentPointer=0x04 → ClientId@0x20
+//      ClientId=0x08 → ActiveRpcHandle@0x28 → TLS@0x2C → PEB*@0x30
 // ---------------------------------------------------------------------------
 
 typedef struct _NT_TEB_MINIMAL {
 #ifdef _M_X64
-    BYTE        Reserved1[0x40];
+    BYTE     Reserved1[0x40];           // NT_TIB (0x38) + EnvironmentPointer (0x08)
+    CLIENT_ID ClientId;                 // offset 0x40
+    PVOID    ActiveRpcHandle;           // offset 0x50
+    PVOID    ThreadLocalStoragePointer; // offset 0x58
+    NT_PEB  *ProcessEnvironmentBlock;   // offset 0x60
 #else
-    BYTE        Reserved1[0x20];
+    BYTE     Reserved1[0x20];           // NT_TIB (0x1C) + EnvironmentPointer (0x04)
+    CLIENT_ID ClientId;                 // offset 0x20
+    PVOID    ActiveRpcHandle;           // offset 0x28
+    PVOID    ThreadLocalStoragePointer; // offset 0x2C
+    NT_PEB  *ProcessEnvironmentBlock;   // offset 0x30
 #endif
-    CLIENT_ID   ClientId;
 } NT_TEB_MINIMAL;
 
-FORCEINLINE NT_TEB_MINIMAL* NtCurrentTeb_nt(void) {
+FORCEINLINE NT_TEB_MINIMAL *NtCurrentTeb_nt(void) {
 #ifdef _M_X64
-    return (NT_TEB_MINIMAL*)__readgsqword(0x30);
+    return (NT_TEB_MINIMAL *)__readgsqword(0x30);
 #else
-    return (NT_TEB_MINIMAL*)__readfsdword(0x18);
+    return (NT_TEB_MINIMAL *)__readfsdword(0x18);
 #endif
 }
 
+FORCEINLINE NT_PEB *RtlCurrentPeb(void) {
+    return NtCurrentTeb_nt()->ProcessEnvironmentBlock;
+}
+
 #define NtCurrentClientId() (NtCurrentTeb_nt()->ClientId)
+
+// RtlProcessHeap is not exported by ntdll.dll; it is defined in phnt as a
+// macro that reads ProcessHeap from the PEB (ntrtl.h).
+#define RtlProcessHeap() (RtlCurrentPeb()->ProcessHeap)
 
 // ---------------------------------------------------------------------------
 // Information class enumerations
@@ -339,8 +385,7 @@ NTSTATUS NTAPI NtDelayExecution(
     BOOLEAN         Alertable,
     PLARGE_INTEGER  DelayInterval);
 
-// Heap
-PVOID   NTAPI RtlProcessHeap(void);
+// Heap  (RtlProcessHeap is a macro above — not an ntdll export)
 PVOID   NTAPI RtlAllocateHeap(PVOID HeapHandle, ULONG Flags, SIZE_T Size);
 BOOLEAN NTAPI RtlFreeHeap(PVOID HeapHandle, ULONG Flags, PVOID BaseAddress);
 PVOID   NTAPI RtlReAllocateHeap(PVOID HeapHandle, ULONG Flags, PVOID BaseAddress, SIZE_T Size);

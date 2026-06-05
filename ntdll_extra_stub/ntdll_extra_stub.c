@@ -28,11 +28,6 @@ ULONG __cdecl vDbgPrintEx(
     return 0;
 }
 
-PVOID NTAPI RtlProcessHeap(void)
-{
-    return NULL;
-}
-
 int __cdecl _snprintf(char *Buffer, size_t Count, const char *Format, ...)
 {
     (void)Buffer; (void)Count; (void)Format;

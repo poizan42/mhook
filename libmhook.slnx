@@ -13,4 +13,10 @@
     <BuildType Solution="ReleaseDynamic|*" Project="Release" />
   </Project>
   <Project Path="ntdll_extra_stub/ntdll_extra_stub.vcxproj" Id="b1e3f8c2-4a5d-4f9e-8b2c-1d6e7a3f9b04" />
+  <Project Path="mhook-unit-tests/mhook-unit-tests.vcxproj" Id="d4a2f8b3-7e1c-4d9a-b5f2-3c8e6a1d0f47">
+    <BuildType Solution="Debug|*"         Project="Debug" />
+    <BuildType Solution="DebugDynamic|*"  Project="DebugDynamic" />
+    <BuildType Solution="Release|*"       Project="Release" />
+    <BuildType Solution="ReleaseDynamic|*" Project="ReleaseDynamic" />
+  </Project>
 </Solution>
