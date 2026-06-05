@@ -1,0 +1,12 @@
+<Solution>
+  <Configurations>
+    <BuildType Name="Debug" />
+    <BuildType Name="DebugDynamic" />
+    <BuildType Name="Release" />
+    <BuildType Name="ReleaseDynamic" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="libmhook.vcxproj" Id="9af4e83d-3670-44c8-84b9-54ffd4afff21" />
+  <Project Path="ntdll_stub/ntdll_stub.vcxproj" Id="b1e3f8c2-4a5d-4f9e-8b2c-1d6e7a3f9b04" />
+</Solution>
