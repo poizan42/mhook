@@ -12,5 +12,5 @@
     <BuildType Solution="DebugDynamic|*" Project="Debug" />
     <BuildType Solution="ReleaseDynamic|*" Project="Release" />
   </Project>
-  <Project Path="ntdll_stub/ntdll_stub.vcxproj" Id="b1e3f8c2-4a5d-4f9e-8b2c-1d6e7a3f9b04" />
+  <Project Path="ntdll_extra_stub/ntdll_extra_stub.vcxproj" Id="b1e3f8c2-4a5d-4f9e-8b2c-1d6e7a3f9b04" />
 </Solution>

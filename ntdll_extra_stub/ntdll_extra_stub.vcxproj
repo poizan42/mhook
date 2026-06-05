@@ -36,7 +36,7 @@
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{B1E3F8C2-4A5D-4F9E-8B2C-1D6E7A3F9B04}</ProjectGuid>
-    <RootNamespace>ntdll_stub</RootNamespace>
+    <RootNamespace>ntdll_extra_stub</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -125,10 +125,10 @@
   <PropertyGroup Condition="'$(Platform)'=='Win32'">
     <OutDir>$(SolutionDir)$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(Platform)\$(Configuration)\</IntDir>
-    <TargetName>ntdll_imports</TargetName>
+    <TargetName>ntdll_extra</TargetName>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Platform)'=='x64'">
-    <TargetName>ntdll_imports</TargetName>
+    <TargetName>ntdll_extra</TargetName>
   </PropertyGroup>
 
   <!-- Compiler: no optimisation needed (stub never runs), omit default libs -->
@@ -143,7 +143,7 @@
       <AdditionalIncludeDirectories>$(ProjectDir)..</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <ModuleDefinitionFile>ntdll_stub.def</ModuleDefinitionFile>
+      <ModuleDefinitionFile>ntdll_extra_stub.def</ModuleDefinitionFile>
       <!-- No default libs; the stub only references ntdll itself (via nt_defs.h
            pragma) which provides the real implementations at runtime. -->
       <IgnoreAllDefaultLibraries>true</IgnoreAllDefaultLibraries>
@@ -154,10 +154,10 @@
   </ItemDefinitionGroup>
 
   <ItemGroup>
-    <ClCompile Include="ntdll_stub.c" />
+    <ClCompile Include="ntdll_extra_stub.c" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="ntdll_stub.def" />
+    <None Include="ntdll_extra_stub.def" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

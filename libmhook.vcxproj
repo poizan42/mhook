@@ -190,7 +190,7 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ModuleDefinitionFile>exports.def</ModuleDefinitionFile>
-      <AdditionalDependencies>ntdll.lib;legacy_stdio_definitions.lib;$(SolutionDir)$(Platform)\$(Configuration)\ntdll_imports.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ntdll.lib;legacy_stdio_definitions.lib;$(SolutionDir)$(Platform)\$(Configuration)\ntdll_extra.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>kernel32.lib;advapi32.lib;user32.lib;ws2_32.lib;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
     </Link>
   </ItemDefinitionGroup>
@@ -221,7 +221,7 @@
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ModuleDefinitionFile>exports.def</ModuleDefinitionFile>
-      <AdditionalDependencies>ntdll.lib;legacy_stdio_definitions.lib;$(OutDir)ntdll_imports.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ntdll.lib;legacy_stdio_definitions.lib;$(OutDir)ntdll_extra.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>kernel32.lib;advapi32.lib;user32.lib;ws2_32.lib;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
     </Link>
   </ItemDefinitionGroup>
@@ -262,7 +262,7 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ModuleDefinitionFile>exports.def</ModuleDefinitionFile>
-      <AdditionalDependencies>ntdll.lib;legacy_stdio_definitions.lib;$(SolutionDir)$(Platform)\$(Configuration)\ntdll_imports.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ntdll.lib;legacy_stdio_definitions.lib;$(SolutionDir)$(Platform)\$(Configuration)\ntdll_extra.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>kernel32.lib;advapi32.lib;user32.lib;ws2_32.lib;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
     </Link>
   </ItemDefinitionGroup>
@@ -303,7 +303,7 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <ModuleDefinitionFile>exports.def</ModuleDefinitionFile>
-      <AdditionalDependencies>ntdll.lib;legacy_stdio_definitions.lib;$(OutDir)ntdll_imports.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ntdll.lib;legacy_stdio_definitions.lib;$(OutDir)ntdll_extra.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>kernel32.lib;advapi32.lib;user32.lib;ws2_32.lib;%(IgnoreSpecificDefaultLibraries)</IgnoreSpecificDefaultLibraries>
     </Link>
   </ItemDefinitionGroup>
@@ -325,7 +325,7 @@
     <ClCompile Include="mhook-lib\mhook.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="ntdll_stub\ntdll_stub.vcxproj">
+    <ProjectReference Include="ntdll_extra_stub\ntdll_extra_stub.vcxproj">
       <Project>{B1E3F8C2-4A5D-4F9E-8B2C-1D6E7A3F9B04}</Project>
     </ProjectReference>
   </ItemGroup>

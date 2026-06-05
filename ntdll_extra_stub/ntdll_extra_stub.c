@@ -1,4 +1,4 @@
-// ntdll_stub.c — link-time-only stub for ntdll.dll exports absent from the
+// ntdll_extra_stub.c — link-time-only stub for ntdll.dll exports absent from the
 // Windows SDK's ntdll.lib.  This DLL is never shipped or loaded at runtime;
 // the .def file sets LIBRARY ntdll.dll so the import lib records the real
 // system DLL name as the load-time dependency.
