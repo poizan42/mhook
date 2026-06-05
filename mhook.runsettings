@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Run settings for Visual Studio Test Explorer.
+
+  ForceListContent: instructs the Google Test Adapter to discover tests by
+  running the executable with the --list_content flag rather than by parsing
+  debug symbols.  Required when the PDB is generated with /DEBUG:FASTLINK
+  (the default for Debug builds) because the adapter cannot resolve symbols
+  from the fragmented PDB without the intermediate .obj files being present
+  on the same machine.
+-->
+<RunSettings>
+  <GoogleTestAdapterSettings>
+    <Settings>
+      <ForceListContent>true</ForceListContent>
+    </Settings>
+  </GoogleTestAdapterSettings>
+</RunSettings>
