@@ -1,13 +1,11 @@
 // Copyright (C) 2004, Matt Conover (mconover@gmail.com)
 #undef NDEBUG
-#include <assert.h>
-#include <windows.h>
 #include "disasm.h"
 
 #ifdef NO_SANITY_CHECKS
 #define NDEBUG
-#undef assert
-#define assert(x)
+#undef MHOOK_ASSERT
+#define MHOOK_ASSERT(x)
 #endif
 
 //////////////////////////////////////////////////////////////////////
@@ -45,12 +43,10 @@ struct _ARCHITECTURE_FORMAT *GetArchitectureFormat(ARCHITECTURE_TYPE Type);
 
 static void DefaultErrorHandler(ULONG64 virtualAddress, BOOL isError, LPCWSTR fmt, ...)
 {
-	va_list vl;
-	va_start(vl,fmt);
-	wprintf(isError ? L"[0x%08I64X] ERROR: " : L"[0x%08I64X] ANOMALY: ", virtualAddress);
-	vwprintf(fmt, vl);
-	wprintf(L"\n");
-	va_end(vl);
+	(void)fmt;
+	DbgPrint(isError ? "[0x%08I64X] DISASM ERROR\n"
+	                 : "[0x%08I64X] DISASM ANOMALY\n",
+	         virtualAddress);
 }
 
 tDisasmErrorProc tDisasmErrorHandler = DefaultErrorHandler;
@@ -67,7 +63,7 @@ BOOL InitDisassembler(DISASSEMBLER *Disassembler, ARCHITECTURE_TYPE Architecture
 	Disassembler->Initialized = DISASSEMBLER_INITIALIZED;
 	
 	ArchFormat = GetArchitectureFormat(Architecture);
-	if (!ArchFormat) { assert(0); return FALSE; }
+	if (!ArchFormat) { MHOOK_ASSERT(0); return FALSE; }
 	Disassembler->ArchType = ArchFormat->Type;
 	Disassembler->Functions = ArchFormat->Functions;
 	return TRUE;
@@ -102,15 +98,15 @@ BOOL InitInstruction(INSTRUCTION *Instruction, DISASSEMBLER *Disassembler)
 // WARNING: This will overwrite the previously obtained instruction
 INSTRUCTION *GetInstruction(DISASSEMBLER *Disassembler, U64 VirtualAddress, U8 *Address, U32 Flags)
 {
-	if (Disassembler->Initialized != DISASSEMBLER_INITIALIZED) { assert(0); return NULL; }
-	assert(Address);
+	if (Disassembler->Initialized != DISASSEMBLER_INITIALIZED) { MHOOK_ASSERT(0); return NULL; }
+	MHOOK_ASSERT(Address);
 	InitInstruction(&Disassembler->Instruction, Disassembler);
 	Disassembler->Instruction.Address = Address;	
 	Disassembler->Instruction.VirtualAddressDelta = VirtualAddress - (U64)Address;
 	if (!Disassembler->Functions->GetInstruction(&Disassembler->Instruction, Address, Flags))
 	{
-		assert(Disassembler->Instruction.Address == Address);
-		assert(Disassembler->Instruction.Length < MAX_INSTRUCTION_LENGTH);
+		MHOOK_ASSERT(Disassembler->Instruction.Address == Address);
+		MHOOK_ASSERT(Disassembler->Instruction.Length < MAX_INSTRUCTION_LENGTH);
 
 		// Save the address that failed, in case the lower-level disassembler didn't
 		Disassembler->Instruction.Address = Address;
@@ -132,7 +128,7 @@ static ARCHITECTURE_FORMAT *GetArchitectureFormat(ARCHITECTURE_TYPE Type)
 		if (Format->Type == Type) return Format;
 	}
 
-	assert(0);
+	MHOOK_ASSERT(0);
 	return NULL;
 }
 

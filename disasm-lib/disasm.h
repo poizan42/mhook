@@ -12,8 +12,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#include <windows.h>
-#include <stdio.h>
+#include "../nt_defs.h"
 #include "misc.h"
 
 typedef signed char S8;

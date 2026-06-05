@@ -1,6 +1,5 @@
 // Copyright (C) 2004, Matt Conover (mconover@gmail.com)
 #undef NDEBUG
-#include <assert.h>
 #include "disasm.h"
 #include "cpu.h"
 
@@ -13,7 +12,7 @@
 #undef NDEBUG
 #undef DEBUG_DISASM
 #undef assert
-#define assert(x)
+#define MHOOK_ASSERT(x)
 #endif
 
 #ifdef DEBUG_DISASM
@@ -62,7 +61,7 @@
 { \
 	if (Instruction->StringAligned) \
 	{  \
-			if (Instruction->StringIndex > x) assert(0); \
+			if (Instruction->StringIndex > x) MHOOK_ASSERT(0); \
 			while (x != Instruction->StringIndex) APPENDB(' ');  \
 	}  \
 	else if (Instruction->StringIndex) \
@@ -93,7 +92,7 @@
 		{ \
 			case 4: X86Instruction->OperandSize = 2; break; \
 			case 2: X86Instruction->OperandSize = 4; break; \
-			default: assert(0); \
+			default: MHOOK_ASSERT(0); \
 		} \
 	} \
 }
@@ -145,17 +144,17 @@
 			case SEG_DS: \
 			case SEG_SS: \
 			case SEG_ES: \
-				assert(!X86Instruction->HasSelector); \
+				MHOOK_ASSERT(!X86Instruction->HasSelector); \
 				Operand->TargetAddress = (U64)X86Instruction->Displacement; \
-				/* assert(!GetAbsoluteAddressFromSegment((BYTE)X86Instruction->Segment, (DWORD)X86Instruction->Displacement) || GetAbsoluteAddressFromSegment(X86Instruction->Segment, (DWORD)X86Instruction->Displacement) == Operand->TargetAddress); */ \
+				/* MHOOK_ASSERT(!GetAbsoluteAddressFromSegment((BYTE)X86Instruction->Segment, (DWORD)X86Instruction->Displacement) || GetAbsoluteAddressFromSegment(X86Instruction->Segment, (DWORD)X86Instruction->Displacement) == Operand->TargetAddress); */ \
 				break; \
 			case SEG_FS: \
 			case SEG_GS: \
-				assert(!X86Instruction->HasSelector); \
+				MHOOK_ASSERT(!X86Instruction->HasSelector); \
 				Operand->TargetAddress = (U64)GetAbsoluteAddressFromSegment((BYTE)X86Instruction->Segment, (DWORD)X86Instruction->Displacement); \
 				break; \
 			default: \
-				assert(0); /* shouldn't be possible */ \
+				MHOOK_ASSERT(0); /* shouldn't be possible */ \
 				break; \
 		} \
 	} \
@@ -165,7 +164,7 @@
 { \
 	if (!X86Instruction->HasSegmentOverridePrefix && (reg == REG_EBP || reg == REG_ESP)) \
 	{ \
-		assert(!X86Instruction->HasSelector); \
+		MHOOK_ASSERT(!X86Instruction->HasSelector); \
 		X86Instruction->Segment = SEG_SS; \
 	} \
 }
@@ -174,7 +173,7 @@
 { \
 	if (Operand->Flags & OP_DST) \
 	{ \
-		assert(!X86Instruction->HasDstAddressing); \
+		MHOOK_ASSERT(!X86Instruction->HasDstAddressing); \
 		X86Instruction->HasDstAddressing = TRUE; \
 		X86Instruction->DstOpIndex[X86Instruction->DstOpCount] = (U8)OperandIndex; \
 		X86Instruction->DstOpCount++; \
@@ -182,7 +181,7 @@
 	} \
 	if (Operand->Flags & OP_SRC) \
 	{ \
-		if (Instruction->Type != ITYPE_STRCMP) assert(!X86Instruction->HasSrcAddressing); \
+		if (Instruction->Type != ITYPE_STRCMP) MHOOK_ASSERT(!X86Instruction->HasSrcAddressing); \
 		X86Instruction->HasSrcAddressing = TRUE; \
 		X86Instruction->SrcOpIndex[X86Instruction->SrcOpCount] = (U8)OperandIndex; \
 		X86Instruction->SrcOpCount++; \
@@ -196,7 +195,7 @@
 	{ \
 		X86Instruction->DstOpIndex[X86Instruction->DstOpCount] = (U8)OperandIndex; \
 		X86Instruction->DstOpCount++; \
-		assert(OperandIndex < 2); \
+		MHOOK_ASSERT(OperandIndex < 2); \
 		if (Operand->Length > 1 && reg == REG_ESP) Instruction->Groups |= ITYPE_STACK; \
 	} \
 	if (Operand->Flags & OP_SRC) \
@@ -572,7 +571,7 @@ INTERNAL U64 ApplyDisplacement(U64 Address, INSTRUCTION *Instruction);
 		case 8: addr = ((U64)(addr + Instruction->VirtualAddressDelta)); break; \
 		case 4: addr = (U64)((U32)(addr + Instruction->VirtualAddressDelta)); break; \
 		case 2: addr = (U64)((U8)(addr + Instruction->VirtualAddressDelta)); break; \
-		default: assert(0); break; \
+		default: MHOOK_ASSERT(0); break; \
 	} \
 }
 
@@ -580,7 +579,7 @@ BOOL X86_InitInstruction(INSTRUCTION *Instruction)
 {
 	X86_INSTRUCTION *X86Instruction;
 #ifdef NO_SANITY_CHECKS
-	assert(0); // be sure assertions are disabled
+	MHOOK_ASSERT(0); // be sure assertions are disabled
 #endif
 	X86Instruction = &Instruction->X86;
 	memset(X86Instruction, 0, sizeof(X86_INSTRUCTION));
@@ -600,7 +599,7 @@ BOOL X86_InitInstruction(INSTRUCTION *Instruction)
 			X86Instruction->OperandSize = 2;
 			break;
 		default:
-			assert(0);
+			MHOOK_ASSERT(0);
 			return FALSE;
 	}
 	X86Instruction->Instruction = Instruction;
@@ -617,7 +616,7 @@ BOOL X86_InitInstruction(INSTRUCTION *Instruction)
 	if (Flags & DISASM_SHOWFLAGS) \
 	{ \
 		APPENDB('{'); \
-		assert(Operand->Flags & (OP_EXEC|OP_SRC|OP_DST)); \
+		MHOOK_ASSERT(Operand->Flags & (OP_EXEC|OP_SRC|OP_DST)); \
 		if (Operand->Flags & OP_IPREL) APPENDB('r'); \
 		if (Operand->Flags & OP_FAR) APPENDB('f'); \
 		if (Operand->Flags & OP_CONDR) APPENDB('c'); \
@@ -661,7 +660,7 @@ BOOL X86_InitInstruction(INSTRUCTION *Instruction)
 			/*else APPEND(OPCSTR, SIZE_LEFT, "-0x%02X=%d", (U8)-Operand->Value_S64, (S8)Operand->Value_S64);*/ \
 			else APPEND(OPCSTR, SIZE_LEFT, "%d", (S8)Operand->Value_S64); \
 			break; \
-		default: assert(0); break; \
+		default: MHOOK_ASSERT(0); break; \
 	} \
 }
 
@@ -678,7 +677,7 @@ BOOL X86_InitInstruction(INSTRUCTION *Instruction)
 		case 2: \
 			APPEND(OPCSTR, SIZE_LEFT, "0x%04X", (U16)X86Instruction->Displacement); \
 			break; \
-		default: assert(0); break; \
+		default: MHOOK_ASSERT(0); break; \
 	} \
 }
 
@@ -707,7 +706,7 @@ BOOL X86_InitInstruction(INSTRUCTION *Instruction)
 		case 2: \
 			X86_WRITE_RELATIVE_DISPLACEMENT16() \
 			break; \
-		default: assert(0); break; \
+		default: MHOOK_ASSERT(0); break; \
 	} \
 }
 
@@ -717,13 +716,13 @@ BOOL X86_InitInstruction(INSTRUCTION *Instruction)
 	{ \
 		case 8: \
 			APPENDS("[rip+ilen"); \
-			assert((op)->TargetAddress); \
+			MHOOK_ASSERT((op)->TargetAddress); \
 			X86_WRITE_RELATIVE_DISPLACEMENT64() \
 			APPEND(OPCSTR, SIZE_LEFT, "]=0x%04I64X", (op)->TargetAddress+Instruction->VirtualAddressDelta); \
 			break; \
 		case 4: \
 			APPENDS("[eip+ilen"); \
-			assert((op)->TargetAddress); \
+			MHOOK_ASSERT((op)->TargetAddress); \
 			X86_WRITE_RELATIVE_DISPLACEMENT32() \
 			APPEND(OPCSTR, SIZE_LEFT, "]=0x%04lX", (U32)((op)->TargetAddress+Instruction->VirtualAddressDelta)); \
 			break; \
@@ -732,22 +731,22 @@ BOOL X86_InitInstruction(INSTRUCTION *Instruction)
 			X86_WRITE_RELATIVE_DISPLACEMENT16() \
 			APPEND(OPCSTR, SIZE_LEFT, "]=0x%04X", (U16)((op)->TargetAddress+Instruction->VirtualAddressDelta)); \
 			break; \
-		default: assert(0); break; \
+		default: MHOOK_ASSERT(0); break; \
 	} \
 }
 
 #define X86_WRITE_OFFSET(op) \
 { \
-	assert((op)->Length <= 8); \
+	MHOOK_ASSERT((op)->Length <= 8); \
 	if (X86Instruction->HasSelector) \
 	{ \
-		assert((op)->Flags & OP_FAR); \
+		MHOOK_ASSERT((op)->Flags & OP_FAR); \
 		APPEND(OPCSTR, SIZE_LEFT, "%s 0x%02X:[", DataSizes[((op)->Length >> 1)], X86Instruction->Selector); \
 	} \
 	else \
 	{ \
-		assert(!((op)->Flags & OP_FAR)); \
-		assert(X86Instruction->Segment < SEG_MAX) ; \
+		MHOOK_ASSERT(!((op)->Flags & OP_FAR)); \
+		MHOOK_ASSERT(X86Instruction->Segment < SEG_MAX) ; \
 		APPEND(OPCSTR, SIZE_LEFT, "%s %s:[", DataSizes[((op)->Length >> 1)], Segments[X86Instruction->Segment]); \
 	} \
 	X86_WRITE_ABSOLUTE_DISPLACEMENT() \
@@ -759,8 +758,8 @@ void OutputAddress(INSTRUCTION *Instruction, INSTRUCTION_OPERAND *Operand, U32 O
 	BOOL ShowDisplacement = FALSE;
 	X86_INSTRUCTION *X86Instruction = &Instruction->X86;
 
-	assert(!X86Instruction->HasSelector);
-	assert(X86Instruction->SrcAddressIndex == OperandIndex || X86Instruction->DstAddressIndex == OperandIndex);
+	MHOOK_ASSERT(!X86Instruction->HasSelector);
+	MHOOK_ASSERT(X86Instruction->SrcAddressIndex == OperandIndex || X86Instruction->DstAddressIndex == OperandIndex);
 	if (Operand->Length > 16 || (Operand->Length > 1 && (Operand->Length & 1))) APPEND(OPCSTR, SIZE_LEFT, "%d_byte ptr ", Operand->Length);
 	else APPEND(OPCSTR, SIZE_LEFT, "%s ", DataSizes[Operand->Length >> 1]);
 
@@ -788,7 +787,7 @@ void OutputAddress(INSTRUCTION *Instruction, INSTRUCTION_OPERAND *Operand, U32 O
 		if (X86Instruction->Relative)
 		{
 			U64 Address = Operand->TargetAddress;
-			assert(Address);
+			MHOOK_ASSERT(Address);
 			APPLY_OFFSET(Address)
 			APPEND(OPCSTR, SIZE_LEFT, "=[0x%04I64X]", Address);
 		}
@@ -816,8 +815,8 @@ void OutputAddress(INSTRUCTION *Instruction, INSTRUCTION_OPERAND *Operand, U32 O
 void OutputBounds(INSTRUCTION *Instruction, INSTRUCTION_OPERAND *Operand, U32 OperandIndex)
 {
 	X86_INSTRUCTION *X86Instruction = &Instruction->X86;
-	assert(X86Instruction->HasSrcAddressing);
-	assert(!(Operand->Length & 1));
+	MHOOK_ASSERT(X86Instruction->HasSrcAddressing);
+	MHOOK_ASSERT(!(Operand->Length & 1));
 	Operand->Length >>= 1;
 	APPENDB('(');
 	OutputAddress(Instruction, Operand, OperandIndex);
@@ -846,7 +845,7 @@ void OutputGeneral(INSTRUCTION *Instruction, INSTRUCTION_OPERAND *Operand, U32 O
 void OutputDescriptor(INSTRUCTION *Instruction, INSTRUCTION_OPERAND *Operand, U32 OperandIndex)
 {
 	X86_INSTRUCTION *X86Instruction = &Instruction->X86;
-	assert(X86Instruction->HasSrcAddressing || X86Instruction->HasDstAddressing);
+	MHOOK_ASSERT(X86Instruction->HasSrcAddressing || X86Instruction->HasDstAddressing);
 	OutputAddress(Instruction, Operand, OperandIndex);
 }
 
@@ -907,28 +906,28 @@ void OutputScalarGeneral(INSTRUCTION *Instruction, INSTRUCTION_OPERAND *Operand,
 void OutputFPUEnvironment(INSTRUCTION *Instruction, INSTRUCTION_OPERAND *Operand, U32 OperandIndex)
 {
 	X86_INSTRUCTION *X86Instruction = &Instruction->X86;
-	assert(X86Instruction->HasSrcAddressing || X86Instruction->HasDstAddressing);
+	MHOOK_ASSERT(X86Instruction->HasSrcAddressing || X86Instruction->HasDstAddressing);
 	OutputAddress(Instruction, Operand, OperandIndex);
 }
 
 void OutputFPUState(INSTRUCTION *Instruction, INSTRUCTION_OPERAND *Operand, U32 OperandIndex)
 {
 	X86_INSTRUCTION *X86Instruction = &Instruction->X86;
-	assert(X86Instruction->HasSrcAddressing || X86Instruction->HasDstAddressing);
+	MHOOK_ASSERT(X86Instruction->HasSrcAddressing || X86Instruction->HasDstAddressing);
 	OutputAddress(Instruction, Operand, OperandIndex);
 }
 
 void OutputCPUState(INSTRUCTION *Instruction, INSTRUCTION_OPERAND *Operand, U32 OperandIndex)
 {
 	X86_INSTRUCTION *X86Instruction = &Instruction->X86;
-	assert(X86Instruction->HasSrcAddressing);
+	MHOOK_ASSERT(X86Instruction->HasSrcAddressing);
 	OutputAddress(Instruction, Operand, OperandIndex);
 }
 
 void OutputSegOffset(INSTRUCTION *Instruction, INSTRUCTION_OPERAND *Operand, U32 OperandIndex)
 {
 	X86_INSTRUCTION *X86Instruction = &Instruction->X86;
-	assert(X86Instruction->HasSrcAddressing);
+	MHOOK_ASSERT(X86Instruction->HasSrcAddressing);
 	OutputAddress(Instruction, Operand, OperandIndex);	
 }
 
@@ -960,7 +959,7 @@ PROLOGUE StandardPrologues[] =
 // it is a valid function
 U8 *X86_FindFunctionByPrologue(INSTRUCTION *Instruction, U8 *StartAddress, U8 *EndAddress, U32 Flags)
 {
-	assert(0); // TODO
+	MHOOK_ASSERT(0); // TODO
 	return NULL;
 }
 
@@ -986,18 +985,18 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 
 	if (Disassemble && !Decode)
 	{
-		assert(0);
+		MHOOK_ASSERT(0);
 		Decode = TRUE;
 	}
 
 	if (!Address || !X86_InitInstruction(Instruction))
 	{
-		assert(0);
+		MHOOK_ASSERT(0);
 		goto abort;
 	}
 
-	assert(Instruction->Address == Address);
-	assert(!Instruction->StringIndex && !Instruction->Length);
+	MHOOK_ASSERT(Instruction->Address == Address);
+	MHOOK_ASSERT(!Instruction->StringIndex && !Instruction->Length);
 
 	Disassembler->Stage1Count++;
 	if (Flags & DISASM_ALIGNOUTPUT) Instruction->StringAligned = TRUE;
@@ -1077,7 +1076,7 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 					{
 						case 4: X86Instruction->OperandSize = 2; break;
 						case 2: X86Instruction->OperandSize = 4; break;
-						default: assert(0); goto abort;
+						default: MHOOK_ASSERT(0); goto abort;
 					}
 					break;
 
@@ -1096,14 +1095,14 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 							X86Instruction->AddressSize = 4;
 							break;
 						case 4:
-							assert(!IS_AMD64()); // this should not be possible
+							MHOOK_ASSERT(!IS_AMD64()); // this should not be possible
 							X86Instruction->AddressSize = 2;
 							break;
 						case 2:
 							X86Instruction->AddressSize = 4;
 							break;
 						default: 
-							assert(0); goto abort;
+							MHOOK_ASSERT(0); goto abort;
 					}
 					break;
 
@@ -1180,7 +1179,7 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 					break;
 
 				default:
-					assert(0);
+					MHOOK_ASSERT(0);
 					goto abort;
 			}
 
@@ -1195,7 +1194,7 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				Instruction->AnomalyOccurred = TRUE;
 			}
 
-			assert(Instruction->AnomalyOccurred || Instruction->PrefixCount < X86_MAX_PREFIX_LENGTH);
+			MHOOK_ASSERT(Instruction->AnomalyOccurred || Instruction->PrefixCount < X86_MAX_PREFIX_LENGTH);
 			Instruction->Prefixes[Instruction->PrefixCount] = Opcode;
 			Instruction->PrefixCount++;
 			//DISASM_OUTPUT(("[0x%08I64X] Prefix 0x%02X (prefix count %d)\n", VIRTUAL_ADDRESS, Opcode, Instruction->PrefixCount));
@@ -1222,7 +1221,7 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 			Instruction->AnomalyOccurred = TRUE;
 		}
 
-		assert(Instruction->AnomalyOccurred || Instruction->PrefixCount < AMD64_MAX_PREFIX_LENGTH);
+		MHOOK_ASSERT(Instruction->AnomalyOccurred || Instruction->PrefixCount < AMD64_MAX_PREFIX_LENGTH);
 
 		Instruction->Prefixes[Instruction->PrefixCount] = Opcode;
 		Instruction->PrefixCount++;
@@ -1230,7 +1229,7 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 		SET_REX(X86Instruction->rex, X86Instruction->rex_b);
 		DISASM_OUTPUT(("[0x%08I64X] REX prefix 0x%02X (prefix count %d, w=%d, r=%d, x=%d, b=%d)\n", VIRTUAL_ADDRESS, Opcode, Instruction->PrefixCount, X86Instruction->rex.w, X86Instruction->rex.r, X86Instruction->rex.x, X86Instruction->rex.b));
 
-		assert(X86Instruction->AddressSize >= 4);
+		MHOOK_ASSERT(X86Instruction->AddressSize >= 4);
 		if (X86Instruction->rex.w)
 		{
 			X86Instruction->OperandSize = 8;
@@ -1238,7 +1237,7 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 		}
 		else if (X86Instruction->HasOperandSizePrefix)
 		{
-			assert(X86Instruction->OperandSize == 2);
+			MHOOK_ASSERT(X86Instruction->OperandSize == 2);
 		}
 		else if (X86Instruction->rex_b == REX_PREFIX_START)
 		{
@@ -1254,7 +1253,7 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 		INSTR_INC(1); // increment Instruction->Length and address
 
 		X86Opcode = &X86_Opcodes_1[Opcode];
-		assert(!X86_PREFIX(X86Opcode));
+		MHOOK_ASSERT(!X86_PREFIX(X86Opcode));
 	}
 	//DISASM_OUTPUT(("[0x%08I64X] OperandSize = %d, AddressSize = %d\n", VIRTUAL_ADDRESS, X86Instruction->OperandSize, X86Instruction->AddressSize));
 	Instruction->LastOpcode = Opcode;
@@ -1271,10 +1270,10 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 		//
 		// Handle case that it is a group (with opcode extension), floating point, or two byte opcode
 		//
-		assert(!Instruction->OpcodeLength);
+		MHOOK_ASSERT(!Instruction->OpcodeLength);
 		Instruction->LastOpcode = Opcode = *Address;
 		INSTR_INC(1); // increment Instruction->Length and address
-		assert(X86Opcode->Table == X86_Opcodes_2);
+		MHOOK_ASSERT(X86Opcode->Table == X86_Opcodes_2);
 		X86Opcode = &X86_Opcodes_2[Opcode];
 
 		//
@@ -1301,7 +1300,7 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 					 GET_REX_W(X86Instruction->rex_b) && !GET_REX_W(X86_REX_2[Opcode])))
 			{
 				if (!SuppressErrors) DISASM_ERROR(L"Illegal REX prefix 0x%02X for opcode 0x%02X 0x%02X", X86Instruction->rex_b, X86_TWO_BYTE_OPCODE, Opcode);
-				assert(0);
+				MHOOK_ASSERT(0);
 				goto abort;
 			}
 #endif
@@ -1329,7 +1328,7 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 		{
 			Instruction->OpcodeLength = 3;
 			Instruction->OpcodeBytes[2] = SSE_Prefix;
-			assert(Instruction->OpcodeBytes[1] == Opcode);
+			MHOOK_ASSERT(Instruction->OpcodeBytes[1] == Opcode);
 
 			// Since the prefix was really an opcode extension, remove it from
 			// the prefix list
@@ -1337,7 +1336,7 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 			{
 				if (Instruction->Prefixes[i]) break;
 			}
-			assert(i != Instruction->PrefixCount);
+			MHOOK_ASSERT(i != Instruction->PrefixCount);
 			Instruction->PrefixCount--;
 			Instruction->Prefixes[i] = 0;
 
@@ -1360,7 +1359,7 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				goto abort;
 			}
 		
-			assert(X86Instruction->HasModRM);
+			MHOOK_ASSERT(X86Instruction->HasModRM);
 			switch (SSE_Prefix)
 			{
 				case PREFIX_OPERAND_SIZE: X86Opcode = &X86_SSE[0x000+Opcode]; break;
@@ -1379,7 +1378,7 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				OpcodeExtension = GET_MODRM_EXT(X86Instruction->modrm_b);
 				Group = X86_Groups_2[Opcode];
 				X86Instruction->Group = (U8)Group;
-				assert(Group >= 13 && Group <= 15 && X86Opcode->Table);
+				MHOOK_ASSERT(Group >= 13 && Group <= 15 && X86Opcode->Table);
 				switch (SSE_Prefix)
 				{
 					case PREFIX_OPERAND_SIZE: X86Opcode = &X86Opcode->Table[0x00+OpcodeExtension]; break;
@@ -1401,15 +1400,15 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 			switch (X86_GET_CATEGORY(X86Opcode))
 			{
 				case ITYPE_SSE: case ITYPE_SSE2: case ITYPE_SSE3: break;
-				default: assert(0); goto abort;
+				default: MHOOK_ASSERT(0); goto abort;
 			}
 		}
 		else if (X86_EXTENDED_OPCODE(X86Opcode)) // 2 byte group
 		{
-			assert(!X86Opcode->MnemonicFlags);
+			MHOOK_ASSERT(!X86Opcode->MnemonicFlags);
 			OpcodeExtension = GET_MODRM_EXT(X86Instruction->modrm_b);
 
-			assert(X86Opcode->Table);
+			MHOOK_ASSERT(X86Opcode->Table);
 			X86Opcode = &X86Opcode->Table[OpcodeExtension];
 			if (X86_INVALID(X86Opcode))
 			{
@@ -1418,16 +1417,16 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				goto abort;
 			}
 
-			assert(!X86_SPECIAL_EXTENSION(X86Opcode));
+			MHOOK_ASSERT(!X86_SPECIAL_EXTENSION(X86Opcode));
 			Group = X86_Groups_2[Opcode];
 			X86Instruction->Group = (U8)Group;
-			assert(Group > 0 && Group <= 19);
-			assert(X86Opcode->Mnemonic);
+			MHOOK_ASSERT(Group > 0 && Group <= 19);
+			MHOOK_ASSERT(X86Opcode->Mnemonic);
 			DISASM_OUTPUT(("[0x%08I64X] Group %d (bytes 0x%02X 0x%02X) extension 0x%02X (\"%s\")\n", VIRTUAL_ADDRESS, Group, X86_TWO_BYTE_OPCODE, Opcode, OpcodeExtension, X86Opcode->Mnemonic));
 		}
 		else
 		{
-			assert(X86Opcode->Mnemonic);
+			MHOOK_ASSERT(X86Opcode->Mnemonic);
 			DISASM_OUTPUT(("[0x%08I64X] Two byte opcode 0x%02X 0x%02X (\"%s\")\n", VIRTUAL_ADDRESS, X86_TWO_BYTE_OPCODE, Opcode, X86Opcode->Mnemonic));
 			X86Instruction->HasModRM = X86_ModRM_2[Opcode];
 			if (X86Instruction->HasModRM) X86Instruction->modrm_b = *Address;
@@ -1451,7 +1450,7 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				 GET_REX_W(X86Instruction->rex_b) && !GET_REX_W(X86_REX_1[Opcode])))
 			{
 				if (!SuppressErrors) DISASM_ERROR(L"Illegal REX prefix 0x%02X for opcode 0x%02X", X86Instruction->rex_b, Opcode);
-				assert(0);
+				MHOOK_ASSERT(0);
 				goto abort;
 			}
 #endif
@@ -1470,7 +1469,7 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 
 		if (X86_EXTENDED_OPCODE(X86Opcode)) // a group
 		{
-			assert(X86Instruction->HasModRM);
+			MHOOK_ASSERT(X86Instruction->HasModRM);
 			OpcodeExtension = GET_MODRM_EXT(*Address); // leave Address pointing at ModRM byte
 
 			if (X86_SPECIAL_EXTENSION(X86Opcode))
@@ -1480,7 +1479,7 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				goto HasSpecialExtension;
 			}
 
-			assert(X86Opcode->Table);
+			MHOOK_ASSERT(X86Opcode->Table);
 			X86Opcode = &X86Opcode->Table[OpcodeExtension];
 			if (X86_INVALID(X86Opcode))
 			{
@@ -1492,8 +1491,8 @@ BOOL X86_GetInstruction(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 			Group = X86_Groups_1[Opcode];
 			X86Instruction->Group = (U8)Group;
 			DISASM_OUTPUT(("[0x%08I64X] Group %d (byte 0x%02X) extension 0x%02X (\"%s\")\n", VIRTUAL_ADDRESS, Group, Opcode, OpcodeExtension, X86Opcode->Mnemonic));
-			assert(Group > 0 && Group <= 17);
-			assert(X86Opcode->Mnemonic);
+			MHOOK_ASSERT(Group > 0 && Group <= 17);
+			MHOOK_ASSERT(X86Opcode->Mnemonic);
 		}
 		else
 		{
@@ -1513,9 +1512,9 @@ HasSpecialExtension:
 	{
 		if (X86Opcode->MnemonicFlags & ITYPE_EXT_MODRM)
 		{
-			assert(X86Opcode->Table);
-			assert(Instruction->OpcodeLength == 2);
-			assert(X86Instruction->HasModRM);
+			MHOOK_ASSERT(X86Opcode->Table);
+			MHOOK_ASSERT(Instruction->OpcodeLength == 2);
+			MHOOK_ASSERT(X86Instruction->HasModRM);
 			X86Opcode = &X86Opcode->Table[*Address];
 			if (X86_INVALID(X86Opcode))
 			{
@@ -1524,10 +1523,10 @@ HasSpecialExtension:
 			}
 			else if (X86_EXTENDED_OPCODE(X86Opcode))
 			{
-				assert(!X86Opcode->MnemonicFlags);
+				MHOOK_ASSERT(!X86Opcode->MnemonicFlags);
 				OpcodeExtension = GET_MODRM_EXT(X86Instruction->modrm_b);
 
-				assert(X86Opcode->Table);
+				MHOOK_ASSERT(X86Opcode->Table);
 				X86Opcode = &X86Opcode->Table[OpcodeExtension];
 				if (X86_INVALID(X86Opcode))
 				{
@@ -1536,11 +1535,11 @@ HasSpecialExtension:
 					goto abort;
 				}
 
-				assert(!X86_SPECIAL_EXTENSION(X86Opcode));
+				MHOOK_ASSERT(!X86_SPECIAL_EXTENSION(X86Opcode));
 				Group = X86_Groups_2[Opcode];
 				X86Instruction->Group = (U8)Group;
-				assert(Group > 0 && Group <= 19);
-				assert(X86Opcode->Mnemonic);
+				MHOOK_ASSERT(Group > 0 && Group <= 19);
+				MHOOK_ASSERT(X86Opcode->Mnemonic);
 				DISASM_OUTPUT(("[0x%08I64X] Group %d (bytes 0x%02X 0x%02X) extension 0x%02X (\"%s\")\n", VIRTUAL_ADDRESS, Group, X86_TWO_BYTE_OPCODE, Opcode, OpcodeExtension, X86Opcode->Mnemonic));
 			}
 			else if (!X86_OPERAND_COUNT(X86Opcode))
@@ -1550,7 +1549,7 @@ HasSpecialExtension:
 		}
 		else if (X86Opcode->MnemonicFlags & ITYPE_EXT_FPU)
 		{
-			assert(X86Opcode->Table);		
+			MHOOK_ASSERT(X86Opcode->Table);		
 			if (X86Instruction->modrm_b < 0xC0)
 			{
 				// It is an opcode extension, use the X86Opcode->Table
@@ -1586,12 +1585,12 @@ HasSpecialExtension:
 				X86Instruction->OperandSize = 4;
 			}
 			Instruction->OperandCount = X86_OPERAND_COUNT(X86Opcode);
-			assert(Instruction->OpcodeLength == 2 && X86Instruction->HasModRM && Instruction->OperandCount == 2);
+			MHOOK_ASSERT(Instruction->OpcodeLength == 2 && X86Instruction->HasModRM && Instruction->OperandCount == 2);
 			memcpy(&X86Instruction->Opcode, X86Opcode, sizeof(X86_OPCODE));
 			Instruction->Operands[0].Flags = X86Opcode->OperandFlags[0] & X86_OPFLAGS_MASK;
 			Instruction->Operands[1].Flags = X86Opcode->OperandFlags[1] & X86_OPFLAGS_MASK;
 			Instruction->Operands[2].Flags = X86Opcode->OperandFlags[2] & X86_OPFLAGS_MASK;
-			assert(Address == Instruction->Address + Instruction->Length);
+			MHOOK_ASSERT(Address == Instruction->Address + Instruction->Length);
 			if (!SetOperands(Instruction, Address, Flags & DISASM_SUPPRESSERRORS)) goto abort;
 			Suffix = Instruction->Address[Instruction->Length++];
 			Instruction->OpcodeBytes[2] = Suffix;
@@ -1603,14 +1602,14 @@ HasSpecialExtension:
 				if (!SuppressErrors) DISASM_ERROR(L"Illegal opcode 0x%02X 0x%02X + suffix 0x%02X", Instruction->OpcodeBytes[0], Instruction->OpcodeBytes[1], Suffix);
 				goto abort;
 			}
-			assert(Instruction->Length >= 4 + Instruction->PrefixCount);
+			MHOOK_ASSERT(Instruction->Length >= 4 + Instruction->PrefixCount);
 		}
 		else if (X86Opcode->MnemonicFlags & ITYPE_EXT_64)
 		{
-			assert(X86Opcode->Table);
+			MHOOK_ASSERT(X86Opcode->Table);
 			if (IS_AMD64()) X86Opcode = &X86Opcode->Table[1];
 			else X86Opcode = &X86Opcode->Table[0];
-			assert(!X86_INVALID(X86Opcode));
+			MHOOK_ASSERT(!X86_INVALID(X86Opcode));
 		}
 	}
 
@@ -1627,12 +1626,12 @@ HasSpecialExtension:
 	}
 
 	// Copy the opcode into the local structure and set the fields 
-	assert(Instruction->OpcodeLength && !X86_INVALID(X86Opcode));
+	MHOOK_ASSERT(Instruction->OpcodeLength && !X86_INVALID(X86Opcode));
 	memcpy(&X86Instruction->Opcode, X86Opcode, sizeof(X86_OPCODE));
 	Instruction->Groups |= X86_GET_CATEGORY(X86Opcode);
-	assert(Instruction->Groups);
+	MHOOK_ASSERT(Instruction->Groups);
 	Instruction->Type |= X86_GET_TYPE(X86Opcode);
-	assert((U32)Instruction->Type >= Instruction->Groups);
+	MHOOK_ASSERT((U32)Instruction->Type >= Instruction->Groups);
 	Instruction->OperandCount = X86_OPERAND_COUNT(X86Opcode);
 
 	//
@@ -1683,7 +1682,7 @@ HasSpecialExtension:
 
 				case PREFIX_REPNE:
 				case PREFIX_REP:
-					if (Instruction->Groups & ITYPE_FPU) { assert(Instruction->Repeat); continue; }
+					if (Instruction->Groups & ITYPE_FPU) { MHOOK_ASSERT(Instruction->Repeat); continue; }
 					// The Intel manual says this results in unpredictable behavior -- it's not even
 					// clear which SSE prefix is used as the third opcode byte in this case
 					// (e.g., is it the first or last SSE prefix?)
@@ -1702,7 +1701,7 @@ HasSpecialExtension:
 		// Check for use of rex.w=1 with an operand size prefix
 		if (X86Instruction->rex.w)
 		{
-			assert(X86Instruction->OperandSize == 8);
+			MHOOK_ASSERT(X86Instruction->OperandSize == 8);
 			for (i = 0; i < Instruction->PrefixCount; i++)
 			{
 				if (Instruction->Prefixes[i] == PREFIX_OPERAND_SIZE)
@@ -1758,12 +1757,12 @@ HasSpecialExtension:
 
 			if (X86Instruction->HasOperandSizePrefix)
 			{
-				assert(X86Instruction->OperandSize == 2);
+				MHOOK_ASSERT(X86Instruction->OperandSize == 2);
 				X86Instruction->HasDefault64Operand = FALSE;
 			}
 			else
 			{
-				assert(X86Instruction->OperandSize >= 4);
+				MHOOK_ASSERT(X86Instruction->OperandSize >= 4);
 				X86Instruction->OperandSize = 8;
 			}
 		}
@@ -1808,7 +1807,7 @@ HasSpecialExtension:
 
 	if (Disassemble)
 	{
-		assert(!Instruction->StringIndex);
+		MHOOK_ASSERT(!Instruction->StringIndex);
 		if (X86Instruction->HasRepeatWhileEqualPrefix)
 		{
 			if (Instruction->Type == ITYPE_STRCMP) { APPENDS("repe "); }
@@ -1830,9 +1829,9 @@ HasSpecialExtension:
 		Instruction->Operands[2].Flags = X86Opcode->OperandFlags[2] & X86_OPFLAGS_MASK;
 		Address = SetOperands(Instruction, Address, Flags);
 		if (!Address) goto abort;
-		assert(!(Instruction->Operands[0].Flags & 0x7F));
-		assert(!(Instruction->Operands[1].Flags & 0x7F));
-		assert(!(Instruction->Operands[2].Flags & 0x7F));
+		MHOOK_ASSERT(!(Instruction->Operands[0].Flags & 0x7F));
+		MHOOK_ASSERT(!(Instruction->Operands[1].Flags & 0x7F));
+		MHOOK_ASSERT(!(Instruction->Operands[2].Flags & 0x7F));
 	}
 
 	Disassembler->Stage2Count++;
@@ -1849,7 +1848,7 @@ HasSpecialExtension:
 		{
 			DISASM_ERROR(L"WARNING: instruction lengths differ (%d vs %d)", Instruction->Length, InstructionLength);
 			DumpInstruction(Instruction, TRUE, TRUE);
-			assert(0);
+			MHOOK_ASSERT(0);
 		}
 	}
 	else if (IS_AMD64())
@@ -1926,7 +1925,7 @@ HasSpecialExtension:
 
 	if ((X86Opcode->OperandFlags[0] & OP_COND_EXEC) == OP_COND_EXEC)
 	{
- 		assert(Instruction->Type == ITYPE_BRANCHCC || Instruction->Type == ITYPE_LOOPCC);
+ 		MHOOK_ASSERT(Instruction->Type == ITYPE_BRANCHCC || Instruction->Type == ITYPE_LOOPCC);
 		for (i = 0; i < Instruction->PrefixCount; i++)
 		{
 			switch (Instruction->Prefixes[i])
@@ -2143,16 +2142,16 @@ HasSpecialExtension:
 		{
 			case ITYPE_BRANCH:
 				Operand1->Flags |= OP_ADDRESS;
-				assert(Instruction->OperandCount == 1);
+				MHOOK_ASSERT(Instruction->OperandCount == 1);
 				if (!(Operand1->Flags & (OP_GLOBAL|OP_FAR)))
 				{
-					assert(!X86Instruction->HasSelector);
+					MHOOK_ASSERT(!X86Instruction->HasSelector);
 					X86Instruction->Segment = SEG_CS;
 				}
 				
 				if (Operand1->TargetAddress)
 				{
-					assert(!Instruction->CodeBranch.AddressOffset);
+					MHOOK_ASSERT(!Instruction->CodeBranch.AddressOffset);
 					Instruction->CodeBranch.Count = 1;
 					Instruction->CodeBranch.Addresses[0] = Operand1->TargetAddress;
 					Instruction->CodeBranch.Operand = Operand1;
@@ -2163,16 +2162,16 @@ HasSpecialExtension:
 					 ((X86Instruction->HasBaseRegister && !X86Instruction->HasIndexRegister) ||
 					 (!X86Instruction->HasBaseRegister && X86Instruction->HasIndexRegister)))
 				{
-					assert(Operand1->Length <= 0xFF);
+					MHOOK_ASSERT(Operand1->Length <= 0xFF);
 					if (!X86Instruction->Scale)
 					{
 						if (Operand1->Length) X86Instruction->Scale = (U8)Operand1->Length;
 						else X86Instruction->Scale = X86Instruction->OperandSize;
 					}
-					assert(Operand1->Length <= 0xFF);
+					MHOOK_ASSERT(Operand1->Length <= 0xFF);
 					tmpScale = MAX(X86Instruction->Scale, Operand1->Length);
 
-					assert(tmpScale <= 16);
+					MHOOK_ASSERT(tmpScale <= 16);
 					Instruction->CodeBranch.AddressOffset = (U8)tmpScale;
 					for (i = 0; i < MAX_CODE_REFERENCE_COUNT; i++) Instruction->CodeBranch.Addresses[i] = (U64)X86Instruction->Displacement + (i * tmpScale);
 					Instruction->CodeBranch.Count = i;
@@ -2185,16 +2184,16 @@ HasSpecialExtension:
 				Instruction->Groups |= ITYPE_STACK;
 				Instruction->CodeBranch.IsCall = TRUE;
 				Operand1->Flags |= OP_ADDRESS;
-				assert(Instruction->OperandCount == 1);
+				MHOOK_ASSERT(Instruction->OperandCount == 1);
 				if (!(Operand1->Flags & (OP_GLOBAL|OP_FAR)))
 				{
-					assert(!X86Instruction->HasSelector);
+					MHOOK_ASSERT(!X86Instruction->HasSelector);
 					X86Instruction->Segment = SEG_CS;
 				}
 								
 				if (Operand1->TargetAddress)
 				{
-					assert(!Instruction->CodeBranch.AddressOffset);
+					MHOOK_ASSERT(!Instruction->CodeBranch.AddressOffset);
 					Instruction->CodeBranch.Count = 1;
 					Instruction->CodeBranch.Addresses[0] = Operand1->TargetAddress;
 					Instruction->CodeBranch.Operand = Operand1;
@@ -2208,15 +2207,15 @@ HasSpecialExtension:
 					//DISASM_OUTPUT(("[0x%08I64X] Scale %d, displacement 0x%08I64x\n", VIRTUAL_ADDRESS, X86Instruction->Scale, X86Instruction->Displacement));
 					if (!X86Instruction->Scale)
 					{
-						assert(Operand1->Length <= 0xFF);
+						MHOOK_ASSERT(Operand1->Length <= 0xFF);
 						if (Operand1->Length) X86Instruction->Scale = (U8)Operand1->Length;
 						else X86Instruction->Scale = X86Instruction->OperandSize;
 					}
 					tmpScale = MAX(X86Instruction->Scale, Operand1->Length);
 
-					assert(tmpScale <= 16);
+					MHOOK_ASSERT(tmpScale <= 16);
 					Instruction->CodeBranch.AddressOffset = (U8)tmpScale;
-					assert(X86Instruction->Scale > 1);
+					MHOOK_ASSERT(X86Instruction->Scale > 1);
 					for (i = 0; i < MAX_CODE_REFERENCE_COUNT; i++) Instruction->CodeBranch.Addresses[i] = (U64)X86Instruction->Displacement + (i * tmpScale);
 					Instruction->CodeBranch.Count = i;
 					Instruction->CodeBranch.IsIndirect = TRUE;
@@ -2225,18 +2224,18 @@ HasSpecialExtension:
 				break;
 
 			case ITYPE_BRANCHCC:
-				assert(Instruction->OperandCount == 1);
-				assert(Operand1->Flags & OP_ADDRESS);
-				assert(Operand1->Type == OPTYPE_OFFSET);
+				MHOOK_ASSERT(Instruction->OperandCount == 1);
+				MHOOK_ASSERT(Operand1->Flags & OP_ADDRESS);
+				MHOOK_ASSERT(Operand1->Type == OPTYPE_OFFSET);
 				if (!(Operand1->Flags & (OP_GLOBAL|OP_FAR)))
 				{
-					assert(!X86Instruction->HasSelector);
+					MHOOK_ASSERT(!X86Instruction->HasSelector);
 					X86Instruction->Segment = SEG_CS;
 				}
 
 				if (Operand1->TargetAddress)
 				{
-					assert(!Instruction->CodeBranch.AddressOffset);
+					MHOOK_ASSERT(!Instruction->CodeBranch.AddressOffset);
 					Instruction->CodeBranch.Count = 2;
 					Instruction->CodeBranch.Addresses[0] = Operand1->TargetAddress;
 					Instruction->CodeBranch.Addresses[1] = (U64)Instruction->Address + Instruction->Length;
@@ -2246,13 +2245,13 @@ HasSpecialExtension:
 
 			case ITYPE_LOOPCC:
 				Instruction->CodeBranch.IsLoop = TRUE;
-				assert(Instruction->OperandCount == 1);
-				assert(Operand1->Flags & OP_ADDRESS);
-				assert(Operand1->Type == OPTYPE_OFFSET);
-				assert(!(Operand1->Flags & (OP_GLOBAL|OP_FAR)));
+				MHOOK_ASSERT(Instruction->OperandCount == 1);
+				MHOOK_ASSERT(Operand1->Flags & OP_ADDRESS);
+				MHOOK_ASSERT(Operand1->Type == OPTYPE_OFFSET);
+				MHOOK_ASSERT(!(Operand1->Flags & (OP_GLOBAL|OP_FAR)));
 				if (Operand1->TargetAddress)
 				{
-					assert(!Instruction->CodeBranch.AddressOffset);
+					MHOOK_ASSERT(!Instruction->CodeBranch.AddressOffset);
 					Instruction->CodeBranch.Count = 2;
 					Instruction->CodeBranch.Addresses[0] = Operand1->TargetAddress;
 					Instruction->CodeBranch.Addresses[1] = (U64)Instruction->Address + Instruction->Length;
@@ -2276,7 +2275,7 @@ HasSpecialExtension:
 			{
 				if (Operand->Flags & OP_DST)
 				{
-					assert(!Instruction->DataDst.Count);
+					MHOOK_ASSERT(!Instruction->DataDst.Count);
 					Instruction->DataDst.Count = 1;
 					Instruction->DataDst.Addresses[0] = Operand->TargetAddress;
 					Instruction->DataDst.DataSize = Operand->Length;
@@ -2285,7 +2284,7 @@ HasSpecialExtension:
 				}
 				if (Operand->Flags & OP_SRC)
 				{
-					assert(!Instruction->DataSrc.Count);
+					MHOOK_ASSERT(!Instruction->DataSrc.Count);
 					Instruction->DataSrc.Count = 1;
 					Instruction->DataSrc.Addresses[0] = Operand->TargetAddress;
 					Instruction->DataSrc.DataSize = Operand->Length;
@@ -2303,17 +2302,17 @@ HasSpecialExtension:
 				DISASM_OUTPUT(("[0x%08I64X] Data reference (scale %d, size %d, displacement 0x%08I64x)\n", VIRTUAL_ADDRESS, X86Instruction->Scale, Operand->Length, X86Instruction->Displacement));
 				if (!X86Instruction->Scale)
 				{
-					assert(Operand->Length <= 0xFF);
+					MHOOK_ASSERT(Operand->Length <= 0xFF);
 					if (Operand->Length) X86Instruction->Scale = (U8)Operand->Length;
 					else X86Instruction->Scale = X86Instruction->OperandSize;
 				}
 				tmpScale = MAX(X86Instruction->Scale, Operand->Length);
 
-				assert(X86Instruction->HasFullDisplacement);
+				MHOOK_ASSERT(X86Instruction->HasFullDisplacement);
 				if (Operand->Flags & OP_DST)
 				{
-					assert(!Instruction->DataDst.Count);
-					assert(tmpScale <= 16);
+					MHOOK_ASSERT(!Instruction->DataDst.Count);
+					MHOOK_ASSERT(tmpScale <= 16);
 					Instruction->CodeBranch.AddressOffset = (U8)tmpScale;
 					for (i = 0; i < MAX_DATA_REFERENCE_COUNT; i++) Instruction->DataDst.Addresses[i] = (U64)X86Instruction->Displacement + (i * tmpScale);
 					Instruction->DataDst.Count = i;
@@ -2322,8 +2321,8 @@ HasSpecialExtension:
 				}					
 				if (Operand->Flags & OP_SRC)
 				{
-					assert(!Instruction->DataSrc.Count);
-					assert(tmpScale <= 16);
+					MHOOK_ASSERT(!Instruction->DataSrc.Count);
+					MHOOK_ASSERT(tmpScale <= 16);
 					Instruction->CodeBranch.AddressOffset = (U8)tmpScale;
 					for (i = 0; i < MAX_DATA_REFERENCE_COUNT; i++) Instruction->DataSrc.Addresses[i] = (U64)X86Instruction->Displacement + (i * tmpScale);
 					Instruction->DataSrc.Count = i;
@@ -2339,13 +2338,13 @@ HasSpecialExtension:
 		switch (Instruction->Type)
 		{
 			case ITYPE_PUSH:
-				assert(Instruction->OperandCount == 1 && Operand1->Length);
+				MHOOK_ASSERT(Instruction->OperandCount == 1 && Operand1->Length);
 				Instruction->StackChange = -Operand1->Length;
 				SANITY_CHECK_ADDRESS_SIZE();
 				break;
 
 			case ITYPE_POP:
-				assert(Instruction->OperandCount == 1 && Operand1->Length);
+				MHOOK_ASSERT(Instruction->OperandCount == 1 && Operand1->Length);
 				Instruction->StackChange = Operand1->Length;
 				SANITY_CHECK_ADDRESS_SIZE();
 				break;
@@ -2484,7 +2483,7 @@ HasSpecialExtension:
 				Instruction->NeedsEmulation = TRUE;
 				break;
 			default:
-				assert(0);
+				MHOOK_ASSERT(0);
 				break;
 		}
 	}
@@ -2571,7 +2570,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 	for (OperandIndex = 0; OperandIndex < Instruction->OperandCount; OperandIndex++)
 	{
 		Operand = &Instruction->Operands[OperandIndex];
-		assert(!(Operand->Flags & 0x7F));
+		MHOOK_ASSERT(!(Operand->Flags & 0x7F));
 		
 		OperandFlags = X86Opcode->OperandFlags[OperandIndex] & X86_OPFLAGS_MASK;
 		OperandType = X86Opcode->OperandFlags[OperandIndex] & X86_OPTYPE_MASK;
@@ -2687,7 +2686,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				}
 				continue;
 			case OPTYPE_CSTAR_MSR:
-				assert(!IS_AMD64());
+				MHOOK_ASSERT(!IS_AMD64());
 				if (!Decode) continue;
 				Operand->Length = 8;
 				Operand->Type = OPTYPE_SPECIAL;
@@ -2699,7 +2698,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				}
 				continue;
 			case OPTYPE_LSTAR_MSR:
-				assert(IS_AMD64());
+				MHOOK_ASSERT(IS_AMD64());
 				if (!Decode) continue;
 				Operand->Length = 8;
 				Operand->Type = OPTYPE_SPECIAL;
@@ -2745,7 +2744,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 						if (X86Instruction->rex_b) CHECK_AMD64_REG();
 						break;
 					default:
-						assert(0);
+						MHOOK_ASSERT(0);
 						return NULL;
 				}
 				X86_SET_REG(Register);
@@ -2856,7 +2855,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 					case 8: Operand->Register = AMD64_REG_RBP; break;
 					case 4: Operand->Register = X86_REG_EBP; break;
 					case 2: Operand->Register = X86_REG_BP; break;
-					default: assert(0); return NULL;
+					default: MHOOK_ASSERT(0); return NULL;
 				}
 				X86_SET_REG(0);
 				//DISASM_OUTPUT(("[SetOperand] xAX_BIG (size = %d)\n", Operand->Length));
@@ -2875,7 +2874,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 					case 8: Operand->Register = AMD64_REG_RAX; break;
 					case 4: Operand->Register = X86_REG_EAX; break;
 					case 2: Operand->Register = X86_REG_AX; break;
-					default: assert(0); return NULL;
+					default: MHOOK_ASSERT(0); return NULL;
 				}
 				X86_SET_REG(0);
 				//DISASM_OUTPUT(("[SetOperand] xAX_BIG (size = %d)\n", Operand->Length));
@@ -2893,7 +2892,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 					case 8: Operand->Register = X86_REG_EAX; break;
 					case 4: Operand->Register = X86_REG_AX; break;
 					case 2: Operand->Register = X86_REG_AL; break;
-					default: assert(0); return NULL;
+					default: MHOOK_ASSERT(0); return NULL;
 				}
 				X86_SET_REG(0);
 				//DISASM_OUTPUT(("[SetOperand] xAX_SMALL (size = %d)\n", Operand->Length));
@@ -2914,7 +2913,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 						case 8: APPENDS("<RCX:RBX>"); break;
 						case 4: APPENDS("<ECX:EBX>"); break;
 						case 2: APPENDS("<CX:BX>"); break;
-						default: assert(0); return NULL;
+						default: MHOOK_ASSERT(0); return NULL;
 					}
 					X86_WRITE_OPFLAGS();
 				}
@@ -2930,7 +2929,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 						case 8: APPENDS("<RDX:RAX>"); break;
 						case 4: APPENDS("<EDX:EAX>"); break;
 						case 2: APPENDS("<DX:AX>"); break;
-						default: assert(0); return NULL;
+						default: MHOOK_ASSERT(0); return NULL;
 					}
 					X86_WRITE_OPFLAGS();
 				}
@@ -2980,7 +2979,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 					case 8: Operand->Register = AMD64_REG_RFLAGS; break;
 					case 4: Operand->Register = X86_REG_EFLAGS; break;
 					case 2: Operand->Register = X86_REG_FLAGS; break;
-					default: assert(0); return NULL;
+					default: MHOOK_ASSERT(0); return NULL;
 				}
 				//DISASM_OUTPUT(("[SetOperand] reg xFLAGS (size = %d)\n", Operand->Length));
 				if (Disassemble)
@@ -3275,7 +3274,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				{
 					case 8: case 4: Operand->Length = 4; break;
 					case 2: Operand->Length = 2; break;
-					default: assert(0); return NULL;
+					default: MHOOK_ASSERT(0); return NULL;
 				}
 				//DISASM_OUTPUT(("[SetOperand] OPTYPE_z (length %d)\n", Operand->Length));
 				break;
@@ -3286,12 +3285,12 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				break;
 
 			case OPTYPE_a: // two word or dword operands in memory (used only by bound)
-				assert(Instruction->OpcodeBytes[0] == X86_BOUND);
+				MHOOK_ASSERT(Instruction->OpcodeBytes[0] == X86_BOUND);
 				switch (X86Instruction->OperandSize)
 				{
 					case 8: case 4: Operand->Length = 8; break;
 					case 2: Operand->Length = 4; break;
-					default: assert(0); return NULL;
+					default: MHOOK_ASSERT(0); return NULL;
 				}
 				//DISASM_OUTPUT(("[SetOperand] OPTYPE_a (size %d)\n", Operand->Length));
 				break;
@@ -3306,7 +3305,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				{
 					case 8: case 4: Operand->Length = 6; break;
 					case 2: Operand->Length = 4; break;
-					default: assert(0); return NULL;
+					default: MHOOK_ASSERT(0); return NULL;
 				}
 				//DISASM_OUTPUT(("[SetOperand] OPTYPE_p (length %d)\n", Operand->Length));
 				break;
@@ -3317,20 +3316,20 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				{
 					case 8: Operand->Length = 8; break;
 					case 4: case 2: Operand->Length = 4; break;
-					default: assert(0); return NULL;
+					default: MHOOK_ASSERT(0); return NULL;
 				}
 				break;
 
 			case OPTYPE_mw: // a word if the destination operand is memory
 				//DISASM_OUTPUT(("[SetOperand] OPTYPE_mw (size 0)\n"));
-				assert(X86Instruction->HasModRM);		
+				MHOOK_ASSERT(X86Instruction->HasModRM);		
 				if (modrm.mod == 3) Operand->Length = X86Instruction->OperandSize; // using register
 				else Operand->Length = 2; // using memory
 				break;
 
 			case OPTYPE_lea:
 				//DISASM_OUTPUT(("[SetOperand] OPTYPE_lea (size 0)\n"));
-				assert(OperandIndex == 1);
+				MHOOK_ASSERT(OperandIndex == 1);
 				Operand->Length = Instruction->Operands[0].Length;
 				break;
 
@@ -3374,7 +3373,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				{
 					case 8: case 4: Operand->Length = 28; break;
 					case 2: Operand->Length = 14; break;
-					default: assert(0); return NULL;
+					default: MHOOK_ASSERT(0); return NULL;
 				}
 				//DISASM_OUTPUT(("[SetOperand] OPTYPE_fev (FPU environment, length %d)\n", Operand->Length));
 				break;
@@ -3384,7 +3383,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				{
 					case 8: case 4: Operand->Length = 108; break;
 					case 2: Operand->Length = 94; break;
-					default: assert(0); return NULL;
+					default: MHOOK_ASSERT(0); return NULL;
 				}
 				//DISASM_OUTPUT(("[SetOperand] OPTYPE_fst1 (FPU state, length %d)\n", Operand->Length));
 				break;
@@ -3421,7 +3420,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				break;
 
 			default:
-				assert(0);
+				MHOOK_ASSERT(0);
 				return NULL;
 		}
 
@@ -3433,7 +3432,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 
 			case AMODE_xlat: // DS:[EBX+AL]
 				if (!Decode) continue;
-				assert(Operand->Length == 1);
+				MHOOK_ASSERT(Operand->Length == 1);
 				Operand->Flags |= OP_ADDRESS | OP_REG;
 				Operand->Type = OPTYPE_STRING;
 				
@@ -3442,7 +3441,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 					case 8: Operand->Register = AMD64_REG_RBX; break;
 					case 4: Operand->Register = X86_REG_EBX; break;
 					case 2: Operand->Register = X86_REG_BX; break;
-					default: assert(0); return NULL;
+					default: MHOOK_ASSERT(0); return NULL;
 				}
 				X86_SET_ADDR();
 				X86Instruction->Scale = 1;
@@ -3480,7 +3479,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 								Instruction->Operands[0].Length == 8)
 							{
 								// For some opcodes the second operand is a sign-extended imm32 value
-								assert(X86Instruction->OperandSize == 8);
+								MHOOK_ASSERT(X86Instruction->OperandSize == 8);
 								switch (Instruction->Type)
 								{
 									case ITYPE_AND:
@@ -3492,11 +3491,11 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 									case ITYPE_TEST:
 									case ITYPE_OR:
 									case ITYPE_XOR:
-										assert(OperandIndex == 1);
+										MHOOK_ASSERT(OperandIndex == 1);
 										Operand->Value_S64 = (S64)*((S32 *)Address);
 										break;
 									default:
-										assert(0);
+										MHOOK_ASSERT(0);
 										if (OperandFlags & OP_SIGNED) Operand->Value_S64 = (S64)*((S32 *)Address);
 										else Operand->Value_U64 = (U64)*((U32 *)Address);
 										break;
@@ -3517,12 +3516,12 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 							else Operand->Value_U64 = (U64)*((U8 *)Address);
 							break;
 						default:
-							assert(0);
+							MHOOK_ASSERT(0);
 							return NULL;
 					}
 				}
 				INSTR_INC(Operand->Length); // increment Instruction->Length and address
-				assert(X86Instruction->OperandSize >= Operand->Length);
+				MHOOK_ASSERT(X86Instruction->OperandSize >= Operand->Length);
 				if (Instruction->Type == ITYPE_PUSH) Operand->Length = X86Instruction->OperandSize;
 
 				//DISASM_OUTPUT(("[SetOperand] AMODE_I (immediate data)\n"));
@@ -3544,7 +3543,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 						case 8: Operand->Register = AMD64_REG_RIP; break;
 						case 4: Operand->Register = X86_REG_EIP; break;
 						case 2: Operand->Register = X86_REG_IP; break;
-						default: assert(0); return NULL;
+						default: MHOOK_ASSERT(0); return NULL;
 					}
 					switch (Operand->Length)
 					{
@@ -3552,7 +3551,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 						case 4: X86Instruction->Displacement = (S64)*((S32 *)Address); break;
 						case 2: X86Instruction->Displacement = (S64)*((S16 *)Address); break;
 						case 1: X86Instruction->Displacement = (S64)*((S8 *)Address); break;
-						default: assert(0); return NULL;
+						default: MHOOK_ASSERT(0); return NULL;
 					}					
 
 					Operand->Value_S64 = X86Instruction->Displacement;
@@ -3568,7 +3567,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				INSTR_INC(Operand->Length); // increment Instruction->Length and address
 				if (!Decode) continue;
 
-				assert((Operand->Flags & OP_EXEC) && (Instruction->Groups & ITYPE_EXEC));
+				MHOOK_ASSERT((Operand->Flags & OP_EXEC) && (Instruction->Groups & ITYPE_EXEC));
 				Operand->TargetAddress = ApplyDisplacement((U64)Address, Instruction);
 				X86Instruction->Relative = TRUE; 
 				X86_SET_ADDR();
@@ -3577,7 +3576,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				X86Instruction->Segment = SEG_CS;
 				X86Instruction->BaseRegister = Operand->Register;
 				X86Instruction->HasBaseRegister = TRUE;
-				assert(Instruction->OperandCount == 1);
+				MHOOK_ASSERT(Instruction->OperandCount == 1);
 				//DISASM_OUTPUT(("[SetOperand] AMODE_J (branch with relative offset)\n"));
 				if (Disassemble)
 				{
@@ -3605,7 +3604,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 						else X86Instruction->Displacement = (S64)*((U16 *)Address);
 						break;
 					default:
-						assert(0);
+						MHOOK_ASSERT(0);
 						return FALSE;
 				}
 
@@ -3615,7 +3614,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				X86Instruction->HasFullDisplacement = TRUE;
 				X86_SET_ADDR();
 				X86_SET_TARGET();
-				assert(X86Instruction->Segment == SEG_DS || X86Instruction->HasSegmentOverridePrefix);
+				MHOOK_ASSERT(X86Instruction->Segment == SEG_DS || X86Instruction->HasSegmentOverridePrefix);
 				//DISASM_OUTPUT(("[SetOperand] AMODE_O (offset)\n"));
 				if (Disassemble)
 				{
@@ -3641,7 +3640,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 						X86Instruction->Displacement = (S64)*((S16 *)Address); INSTR_INC(2);
 						break;
 					default:
-						assert(0);
+						MHOOK_ASSERT(0);
 						return FALSE;
 				}
 				if (!Decode) continue;
@@ -3665,7 +3664,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 					case 8: Operand->Register = AMD64_REG_RSI; break;
 					case 4: Operand->Register = X86_REG_ESI; break;
 					case 2: Operand->Register = X86_REG_SI; break;
-					default: assert(0); return NULL;
+					default: MHOOK_ASSERT(0); return NULL;
 				}
 
 				X86Instruction->BaseRegister = Operand->Register;
@@ -3691,7 +3690,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 					case 8: Operand->Register = AMD64_REG_RDI; break;
 					case 4: Operand->Register = X86_REG_EDI; break;
 					case 2: Operand->Register = X86_REG_DI; break;
-					default: assert(0); return NULL;
+					default: MHOOK_ASSERT(0); return NULL;
 				}
 
 				X86Instruction->BaseRegister = Operand->Register;
@@ -3727,7 +3726,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 			////////////////////////////////////////////////////////////
 
 			case AMODE_PR: // modrm.rm = mmx register and modrm.mod = 11
-				assert(X86Instruction->HasModRM);
+				MHOOK_ASSERT(X86Instruction->HasModRM);
 				if (modrm.mod != 3)
 				{
 					if (!SuppressErrors) DISASM_ERROR(L"mod != 3 for AMODE_PR (\"%s\")", X86Instruction->Opcode.Mnemonic);
@@ -3751,7 +3750,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 
 				if (Disassemble)
 				{
-					assert(X86_Registers[Operand->Register]);
+					MHOOK_ASSERT(X86_Registers[Operand->Register]);
 					APPENDS(X86_Registers[Operand->Register]);
 					X86_WRITE_OPFLAGS();
 				}
@@ -3759,7 +3758,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				continue;
 
 			case AMODE_VR: // modrm.rm = xmm register and modrm.mod = 11
-				assert(X86Instruction->HasModRM);
+				MHOOK_ASSERT(X86Instruction->HasModRM);
 				if (modrm.mod != 3)
 				{
 					if (!SuppressErrors) DISASM_ERROR(L"mod != 3 for AMODE_VR (\"%s\")", X86Instruction->Opcode.Mnemonic);
@@ -3785,7 +3784,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				continue;
 
 			case AMODE_P: // modrm.reg = mmx register
-				assert(X86Instruction->HasModRM);
+				MHOOK_ASSERT(X86Instruction->HasModRM);
 				if (rex_modrm.reg > 7)
 				{
 					if (!SuppressErrors) DISASM_ERROR(L"invalid mmx register %d for AMODE_P (\"%s\")", rex_modrm.reg, X86Instruction->Opcode.Mnemonic);
@@ -3811,7 +3810,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				continue;
 
 			case AMODE_V: // modrm.reg = xmm register
-				assert(X86Instruction->HasModRM);
+				MHOOK_ASSERT(X86Instruction->HasModRM);
 				if (X86Instruction->OperandSize == 2)
 				{
 					if (!SuppressErrors) DISASM_ERROR(L"AMODE_P illegal in 16-bit mode (\"%s\")", X86Instruction->Opcode.Mnemonic);
@@ -3832,7 +3831,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				continue;
 
 			case AMODE_R: // modrm.rm is general register and modrm.mod = 11
-				assert(X86Instruction->HasModRM);
+				MHOOK_ASSERT(X86Instruction->HasModRM);
 				if (modrm.mod != 3)
 				{
 					if (!SuppressErrors) DISASM_ERROR(L"mod != 3 for AMODE_R (\"%s\")", X86Instruction->Opcode.Mnemonic);
@@ -3846,7 +3845,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 					case 4: Operand->Register = X86_32BIT_OFFSET, rex_modrm.rm; CHECK_AMD64_REG(); break;
 					case 2: Operand->Register = X86_16BIT_OFFSET, rex_modrm.rm; CHECK_AMD64_REG(); break;
 					case 1: Operand->Register = X86_8BIT_OFFSET, rex_modrm.rm; if (X86Instruction->rex_b) CHECK_AMD64_REG(); break;
-					default: assert(0); return NULL;
+					default: MHOOK_ASSERT(0); return NULL;
 				}
 				X86_SET_REG(rex_modrm.rm);
 				if (Disassemble)
@@ -3858,7 +3857,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				continue;
 
 			case AMODE_G: // modrm.reg = general register
-				assert(X86Instruction->HasModRM);
+				MHOOK_ASSERT(X86Instruction->HasModRM);
 				if (!Decode) continue;
 				Operand->Flags |= OP_REG;
 				switch (Operand->Length)
@@ -3867,7 +3866,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 					case 4: Operand->Register = X86_32BIT_OFFSET + rex_modrm.reg; CHECK_AMD64_REG(); break;
 					case 2: Operand->Register = X86_16BIT_OFFSET + rex_modrm.reg; CHECK_AMD64_REG(); break;
 					case 1: Operand->Register = X86_8BIT_OFFSET + rex_modrm.reg; if (X86Instruction->rex_b) CHECK_AMD64_REG(); break;
-					default: assert(0); return NULL;
+					default: MHOOK_ASSERT(0); return NULL;
 				}
 				X86_SET_REG(rex_modrm.reg);
 				if (Disassemble)
@@ -3879,7 +3878,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				continue;
 			
 			case AMODE_S: // modrm.reg = segment register
-				assert(X86Instruction->HasModRM);
+				MHOOK_ASSERT(X86Instruction->HasModRM);
 				if (!Decode) continue;
 				Operand->Flags |= OP_REG;
 				switch (X86Instruction->OperandSize)
@@ -3890,7 +3889,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 						if (rex_modrm.reg <= 5) Operand->Register = X86_SEGMENT_OFFSET + rex_modrm.reg;
 						break;
 					default:
-						assert(0);
+						MHOOK_ASSERT(0);
 						return NULL;
 				}
 
@@ -3905,7 +3904,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				continue;
 
 			case AMODE_T: // modrm.reg = test register
-				assert(X86Instruction->HasModRM);
+				MHOOK_ASSERT(X86Instruction->HasModRM);
 				if (!Decode) continue;
 				Instruction->Groups |= ITYPE_SYSTEM;
 				Instruction->NeedsEmulation = TRUE;
@@ -3918,7 +3917,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 						Operand->Register = X86_TEST_OFFSET + rex_modrm.reg;
 						break;
 					default:
-						assert(0);
+						MHOOK_ASSERT(0);
 						return NULL;
 				}
 
@@ -3932,8 +3931,8 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				continue;
 
 			case AMODE_C: // modrm.reg = control register
-				assert(X86Instruction->HasModRM);
-				assert(Instruction->Type == ITYPE_MOV);
+				MHOOK_ASSERT(X86Instruction->HasModRM);
+				MHOOK_ASSERT(Instruction->Type == ITYPE_MOV);
 				if (!Decode) continue;
 				Instruction->Groups |= ITYPE_SYSTEM;
 				Instruction->NeedsEmulation = TRUE;
@@ -3947,7 +3946,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 						Operand->Register = X86_CONTROL_OFFSET + rex_modrm.reg;
 						break;
 					default:
-						assert(0);
+						MHOOK_ASSERT(0);
 						return NULL;
 				}
 
@@ -3961,8 +3960,8 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				continue;
 
 			case AMODE_D: // modrm.reg = debug register
-				assert(X86Instruction->HasModRM);
-				assert(Instruction->Type == ITYPE_MOV);
+				MHOOK_ASSERT(X86Instruction->HasModRM);
+				MHOOK_ASSERT(Instruction->Type == ITYPE_MOV);
 				if (!Decode) continue;
 				Instruction->NeedsEmulation = TRUE;
 				Operand->Flags |= OP_REG;
@@ -3977,7 +3976,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 						Operand->Register = X86_DEBUG_OFFSET + rex_modrm.reg;
 						break;
 					default:
-						assert(0);
+						MHOOK_ASSERT(0);
 						return NULL;
 				}
 
@@ -3995,20 +3994,20 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 			////////////////////////////////////////////////////////////
 
 			case AMODE_M: // memory only
-				assert(X86Instruction->HasModRM);
+				MHOOK_ASSERT(X86Instruction->HasModRM);
 				if (modrm.mod == 3)
 				{
 					if (!SuppressErrors) DISASM_ERROR(L"mod = 3 for AMODE_M (\"%s\")", X86Instruction->Opcode.Mnemonic);
 					goto abort;
 				}
-				assert(X86Instruction->Segment == SEG_DS || X86Instruction->HasSegmentOverridePrefix);
+				MHOOK_ASSERT(X86Instruction->Segment == SEG_DS || X86Instruction->HasSegmentOverridePrefix);
 				//DISASM_OUTPUT(("[SetOperand] AMODE_M (memory only)\n"));
 				Address = SetModRM32(Instruction, Address, Operand, OperandIndex, SuppressErrors);
 				if (!Address) return NULL;
 				break;
 
 			case AMODE_E: // general register or memory
-				assert(X86Instruction->HasModRM);
+				MHOOK_ASSERT(X86Instruction->HasModRM);
 				if (OperandType == OPTYPE_p && modrm.mod == 3)
 				{
 					if (!SuppressErrors) DISASM_ERROR(L"mod = 3 for AMODE_E with OPTYPE_p (\"%s\")", X86Instruction->Opcode.Mnemonic);
@@ -4020,13 +4019,13 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				if (!Address) return NULL;
 				if (Decode && (Instruction->Type == ITYPE_PUSH || Instruction->Type == ITYPE_POP))
 				{
-					assert(X86Instruction->OperandSize >= Operand->Length);
+					MHOOK_ASSERT(X86Instruction->OperandSize >= Operand->Length);
 					Operand->Length = X86Instruction->OperandSize;
 				}
 				break;
 
 			case AMODE_Q: // mmx register or memory address
-				assert(X86Instruction->HasModRM);
+				MHOOK_ASSERT(X86Instruction->HasModRM);
 				//DISASM_OUTPUT(("[SetOperand] AMODE_Q (MMX register or memory address)\n"));
 				if (modrm.mod == 3) // it is a register
 				{
@@ -4047,7 +4046,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				break;
 
 			case AMODE_W: // xmm register or memory address
-				assert(X86Instruction->HasModRM);
+				MHOOK_ASSERT(X86Instruction->HasModRM);
 				//DISASM_OUTPUT(("[SetOperand] AMODE_W (XMM register or memory address)\n"));
 				if (modrm.mod == 3) // it is a register
 				{
@@ -4063,7 +4062,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 				break;
 
 			default:
-				assert(0);
+				MHOOK_ASSERT(0);
 				return NULL;
 		}
 
@@ -4072,7 +4071,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 		// If this is reached then SetModRM32 was called
 		if ((Operand->Flags & OP_ADDRESS))
 		{
-			assert(Operand->Length);
+			MHOOK_ASSERT(Operand->Length);
 			switch (Operand->Register)
 			{
 				case X86_REG_BP:
@@ -4089,7 +4088,7 @@ INTERNAL U8 *SetOperands(INSTRUCTION *Instruction, U8 *Address, U32 Flags)
 		if (Disassemble)
 		{
 			Index = OperandType >> OPTYPE_SHIFT;
-			assert(Index > 0 && Index < MAX_OPTYPE_INDEX && OptypeHandlers[Index]);
+			MHOOK_ASSERT(Index > 0 && Index < MAX_OPTYPE_INDEX && OptypeHandlers[Index]);
 			OptypeHandlers[Index](Instruction, Operand, OperandIndex);
 			X86_WRITE_OPFLAGS();
 		}
@@ -4118,7 +4117,7 @@ INTERNAL U8 *SetModRM16(INSTRUCTION *Instruction, U8 *Address, INSTRUCTION_OPERA
 
 	DISASM_OUTPUT(("[SetModRM16] Current instruction length = %d\n", Instruction->Length));
 	modrm = X86Instruction->modrm;
-	assert(!X86Instruction->rex_b);
+	MHOOK_ASSERT(!X86Instruction->rex_b);
 
 	//
 	// Both operands are registers
@@ -4132,7 +4131,7 @@ INTERNAL U8 *SetModRM16(INSTRUCTION *Instruction, U8 *Address, INSTRUCTION_OPERA
 			case 4: Operand->Register = X86_32BIT_OFFSET + modrm.rm; break;
 			case 2: Operand->Register = X86_16BIT_OFFSET + modrm.rm; break;
 			case 1: Operand->Register = X86_8BIT_OFFSET + modrm.rm; break;
-			default: assert(0); return NULL;
+			default: MHOOK_ASSERT(0); return NULL;
 		}
 		Operand->Flags |= OP_REG;
 	}
@@ -4266,7 +4265,7 @@ INTERNAL U8 *SetModRM32(INSTRUCTION *Instruction, U8 *Address, INSTRUCTION_OPERA
 			case 4: Operand->Register = X86_32BIT_OFFSET + rex_modrm.rm; CHECK_AMD64_REG(); break;
 			case 2: Operand->Register = X86_16BIT_OFFSET + rex_modrm.rm; CHECK_AMD64_REG(); break;
 			case 1: Operand->Register = X86_8BIT_OFFSET + rex_modrm.rm; if (X86Instruction->rex_b) CHECK_AMD64_REG(); break;
-			default: assert(0); return NULL;
+			default: MHOOK_ASSERT(0); return NULL;
 		}
 		X86_SET_REG(rex_modrm.rm);
 		Operand->Flags |= OP_REG;
@@ -4292,7 +4291,7 @@ INTERNAL U8 *SetModRM32(INSTRUCTION *Instruction, U8 *Address, INSTRUCTION_OPERA
 				case 8: Operand->Register = AMD64_REG_RIP; break;
 				case 4: Operand->Register = X86_REG_EIP; break;
 				case 2: Operand->Register = X86_REG_IP; break;
-				default: assert(0); return NULL;
+				default: MHOOK_ASSERT(0); return NULL;
 			}
 			X86Instruction->BaseRegister = Operand->Register;
 			X86Instruction->HasBaseRegister = TRUE;
@@ -4312,7 +4311,7 @@ INTERNAL U8 *SetModRM32(INSTRUCTION *Instruction, U8 *Address, INSTRUCTION_OPERA
 			for (ImmediateSize = 0, i = OperandIndex+1; i < Instruction->OperandCount; i++)
 			{
 				if ((X86Instruction->Opcode.OperandFlags[i] & X86_AMODE_MASK) != AMODE_I) continue;
-				else assert(!ImmediateSize);
+				else MHOOK_ASSERT(!ImmediateSize);
 				switch (X86Instruction->Opcode.OperandFlags[i] & X86_OPTYPE_MASK)
 				{
 					case OPTYPE_v:
@@ -4323,7 +4322,7 @@ INTERNAL U8 *SetModRM32(INSTRUCTION *Instruction, U8 *Address, INSTRUCTION_OPERA
 						{
 							case 8: case 4: ImmediateSize = 4; break;
 							case 2: ImmediateSize = 2; break;
-							default: assert(0); return NULL;
+							default: MHOOK_ASSERT(0); return NULL;
 						}
 						break;
 					case OPTYPE_b:
@@ -4335,7 +4334,7 @@ INTERNAL U8 *SetModRM32(INSTRUCTION *Instruction, U8 *Address, INSTRUCTION_OPERA
 					case OPTYPE_1:
 						break;
 					default:
-						assert(0);
+						MHOOK_ASSERT(0);
 						break;
 				}
 			}
@@ -4362,7 +4361,7 @@ INTERNAL U8 *SetModRM32(INSTRUCTION *Instruction, U8 *Address, INSTRUCTION_OPERA
 		Address = SetSIB(Instruction, Address, Operand, OperandIndex, SuppressErrors);
 		if (!Address)
 		{
-			assert(0);
+			MHOOK_ASSERT(0);
 			return NULL;
 		}
 
@@ -4399,7 +4398,7 @@ INTERNAL U8 *SetModRM32(INSTRUCTION *Instruction, U8 *Address, INSTRUCTION_OPERA
 		{
 			case 8: Operand->Register = AMD64_64BIT_OFFSET + rex_modrm.rm; break;
 			case 4: Operand->Register = X86_32BIT_OFFSET + rex_modrm.rm; CHECK_AMD64_REG(); break;
-			default: assert(0); return NULL;
+			default: MHOOK_ASSERT(0); return NULL;
 		}
 		X86Instruction->BaseRegister = Operand->Register;
 		X86Instruction->HasBaseRegister = TRUE;
@@ -4478,7 +4477,7 @@ INTERNAL U8 *SetSIB(INSTRUCTION *Instruction, U8 *Address, INSTRUCTION_OPERAND *
 					{
 						case 8: Operand->Register = AMD64_REG_RBP; break;
 						case 4: Operand->Register = X86_REG_EBP; break;
-						default: assert(0); return NULL;
+						default: MHOOK_ASSERT(0); return NULL;
 					}
 					X86_SET_SEG(REG_EBP);
 				}
@@ -4500,7 +4499,7 @@ INTERNAL U8 *SetSIB(INSTRUCTION *Instruction, U8 *Address, INSTRUCTION_OPERAND *
 					{
 						case 8: Operand->Register = AMD64_REG_RBP; break;
 						case 4: Operand->Register = X86_REG_EBP; break;
-						default: assert(0); return NULL;
+						default: MHOOK_ASSERT(0); return NULL;
 					}
 					X86_SET_SEG(REG_EBP);
 				}
@@ -4527,7 +4526,7 @@ INTERNAL U8 *SetSIB(INSTRUCTION *Instruction, U8 *Address, INSTRUCTION_OPERAND *
 		{
 			case 8: Operand->Register = AMD64_64BIT_OFFSET + rex_sib.base; break;
 			case 4: Operand->Register = X86_32BIT_OFFSET + rex_sib.base; CHECK_AMD64_REG(); break;
-			default: assert(0); return NULL;
+			default: MHOOK_ASSERT(0); return NULL;
 		}
 		X86Instruction->BaseRegister = Operand->Register;
 		X86Instruction->HasBaseRegister = TRUE;
@@ -4547,7 +4546,7 @@ INTERNAL U8 *SetSIB(INSTRUCTION *Instruction, U8 *Address, INSTRUCTION_OPERAND *
 				break;
 			default:
 				fflush(stdout);
-				assert(0);
+				MHOOK_ASSERT(0);
 				return NULL;
 		}
 
@@ -4601,7 +4600,7 @@ INTERNAL U64 ApplyDisplacement(U64 Address, INSTRUCTION *Instruction)
 			return Address + (PostAddr - PreAddr);
 		}
 		default:
-			assert(0);
+			MHOOK_ASSERT(0);
 			return 0;
 	}
 #else
@@ -4623,11 +4622,11 @@ INTERNAL BOOL IsValidLockPrefix(X86_INSTRUCTION *X86Instruction, U8 Opcode, U32 
 				case 1: // instruction can be locked
 					break;
 				case GR:
-					assert(Group);
+					MHOOK_ASSERT(Group);
 					if (!X86_LockPrefix_Groups[Group-1][OpcodeExtension]) return FALSE;
 					break;
 				default:
-					assert(0);
+					MHOOK_ASSERT(0);
 					return FALSE;
 			}
 			break;
@@ -4641,17 +4640,17 @@ INTERNAL BOOL IsValidLockPrefix(X86_INSTRUCTION *X86Instruction, U8 Opcode, U32 
 				case 1: // lock prefix allowed
 					break;
 				case GR:
-					assert(Group);
+					MHOOK_ASSERT(Group);
 					if (!X86_LockPrefix_Groups[Group-1][OpcodeExtension]) return FALSE;
 					break;
 				default:
-					assert(0);
+					MHOOK_ASSERT(0);
 					return FALSE;
 			}
 			break;
 
 		default:
-			assert(0);
+			MHOOK_ASSERT(0);
 			return FALSE;
 	}
 

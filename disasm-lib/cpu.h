@@ -6,7 +6,7 @@ extern "C" {
 #endif
 #pragma pack(push,1)
 
-#include <windows.h>
+#include "../nt_defs.h"
 #include "misc.h"
 
 ////////////////////////////////////////////////////////

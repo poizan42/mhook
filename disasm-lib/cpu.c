@@ -1,6 +1,5 @@
 // Copyright (C) 2003, Matt Conover (mconover@gmail.com)
 #include "cpu.h"
-#include <assert.h>
 
 // NOTE: this assumes default scenarios (i.e., we assume CS/DS/ES/SS and flat
 // and all have a base of 0 and limit of 0xffffffff, we don't try to verify
@@ -25,7 +24,7 @@ BYTE *GetAbsoluteAddressFromSegment(BYTE Segment, DWORD Offset)
 			// in this bastardized version of the disassembler.
 			// return (BYTE *)get_teb() + Offset;
 		default:
-			assert(0);
+			MHOOK_ASSERT(0);
 			return (BYTE *)(DWORD_PTR)Offset;
 	}
 }
@@ -37,8 +36,13 @@ BYTE *GetAbsoluteAddressFromSelector(WORD Selector, DWORD Offset)
 	GATE_ENTRY *Gate;
 	ULONG_PTR Base;
 	
-	assert(Selector < 0x10000);
-	if (!GetThreadSelectorEntry(GetCurrentThread(), Selector, (LDT_ENTRY *)&Entry)) return NULL;
+	MHOOK_ASSERT(Selector < 0x10000);
+	DESCRIPTOR_TABLE_ENTRY dte;
+	RtlZeroMemory(&dte, sizeof(dte));
+	dte.Selector = Selector;
+	if (!NT_SUCCESS(NtQueryInformationThread(NtCurrentThread(),
+	        ThreadDescriptorTableEntry, &dte, sizeof(dte), NULL))) return NULL;
+	Entry = *(DESCRIPTOR_ENTRY*)&dte.Descriptor;
 	if (!Entry.Present) return NULL;
 	if (Entry.System)
 	{
@@ -81,10 +85,10 @@ BYTE *GetAbsoluteAddressFromSelector(WORD Selector, DWORD Offset)
 #else
 				Base = (Gate->HighOffset << 16) | Gate->LowOffset;
 #endif
-				assert(!Offset); Offset = 0;
+				MHOOK_ASSERT(!Offset); Offset = 0;
 				break;
 			default:
-				assert(0);
+				MHOOK_ASSERT(0);
 				return NULL;
 		}
 	}
