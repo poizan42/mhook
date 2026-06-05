@@ -357,10 +357,21 @@ NTSTATUS NTAPI RtlCharToInteger(PCSZ String, ULONG Base, PULONG Value);
 ULONG NTAPI   DbgPrint(PCSTR Format, ...);
 ULONG __cdecl vDbgPrintEx(ULONG ComponentId, ULONG Level, PCSTR Format, va_list arglist);
 
+// ntdll exports its own _snprintf/_vsnprintf (used in preference to the CRT
+// so that debug builds have no CRT dependency).
+int __cdecl _snprintf(char *Buffer, size_t Count, const char *Format, ...);
+int __cdecl _vsnprintf(char *Buffer, size_t Count, const char *Format, va_list ArgList);
+
 #ifdef __cplusplus
 }
 #endif
 
 #pragma comment(lib, "ntdll.lib")
+// In debug builds, ntdll_extra.lib provides symbols absent from the SDK's
+// ntdll.lib (_snprintf, RtlProcessHeap, etc.) so debug builds have no CRT
+// dependency.
+#ifdef _DEBUG
+#pragma comment(lib, "ntdll_extra.lib")
+#endif
 
 #endif // NT_DEFS_H

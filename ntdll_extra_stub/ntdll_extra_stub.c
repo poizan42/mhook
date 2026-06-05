@@ -33,3 +33,39 @@ PVOID NTAPI RtlProcessHeap(void)
     return NULL;
 }
 
+int __cdecl _snprintf(char *Buffer, size_t Count, const char *Format, ...)
+{
+    (void)Buffer; (void)Count; (void)Format;
+    return 0;
+}
+
+int __cdecl _vsnprintf(char *Buffer, size_t Count, const char *Format, va_list ArgList)
+{
+    (void)Buffer; (void)Count; (void)Format; (void)ArgList;
+    return 0;
+}
+
+void * __cdecl memset(void *Dst, int Val, size_t Size)
+{
+    (void)Dst; (void)Val; (void)Size;
+    return Dst;
+}
+
+void * __cdecl memcpy(void *Dst, const void *Src, size_t Size)
+{
+    (void)Dst; (void)Src; (void)Size;
+    return Dst;
+}
+
+void * __cdecl memmove(void *Dst, const void *Src, size_t Size)
+{
+    (void)Dst; (void)Src; (void)Size;
+    return Dst;
+}
+
+int __cdecl memcmp(const void *Buf1, const void *Buf2, size_t Size)
+{
+    (void)Buf1; (void)Buf2; (void)Size;
+    return 0;
+}
+

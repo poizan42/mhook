@@ -3,3 +3,9 @@ EXPORTS
     NtGetNextThread
     vDbgPrintEx
     RtlProcessHeap
+    _snprintf
+    _vsnprintf
+    memset
+    memcpy
+    memmove
+    memcmp
