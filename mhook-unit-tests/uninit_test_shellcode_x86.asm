@@ -1,4 +1,4 @@
-; shellcode_x86.asm — remote-thread entry point for x86 injection.
+; uninit_test_shellcode_x86.asm — remote-thread entry point for x86 injection.
 ;
 ; Called as:  DWORD WINAPI ShellcodeEntry(LPVOID lpParam)  (__stdcall)
 ;   [EBP+8] = pointer to ShellcodeParams (see uninit_test.cpp)
@@ -16,6 +16,8 @@ PARAM_IsDynamic         EQU 20          ; ULONG (4)
 PARAM__pad              EQU 24          ; ULONG (4, alignment pad)
 PARAM_MhookPath         EQU 28          ; UNICODE_STRING (8)
 PARAM_MhookHandle       EQU 36          ; HANDLE (4)     = 28+8
+
+        PUBLIC ShellcodeEnd
 
 .686
 .model flat, C      ; 'C' language: MASM adds '_' prefix to all PROC names
@@ -66,11 +68,11 @@ CallExecute:
         pop     ebx
         pop     ebp
         ret     4                       ; __stdcall: clean lpParam (4 bytes)
-ShellcodeEntry ENDP
 
 ; Sentinel: immediately follows ShellcodeEntry so that
 ; (ShellcodeEnd - ShellcodeEntry) gives the code size.
-ShellcodeEnd PROC
-ShellcodeEnd ENDP
+ShellcodeEnd::
+        nop
+ShellcodeEntry ENDP
 
 END

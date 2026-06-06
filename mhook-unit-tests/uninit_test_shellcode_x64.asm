@@ -1,4 +1,4 @@
-; shellcode_x64.asm — remote-thread entry point for x64 injection.
+; uninit_test_shellcode_x64.asm — remote-thread entry point for x64 injection.
 ;
 ; Called as:  DWORD WINAPI ShellcodeEntry(LPVOID lpParam)
 ;   RCX = pointer to ShellcodeParams (see uninit_test.cpp)
@@ -16,6 +16,8 @@ PARAM_IsDynamic         EQU 40          ; ULONG (4)
 PARAM__pad              EQU 44          ; ULONG (4, alignment)
 PARAM_MhookPath         EQU 48          ; UNICODE_STRING (16)
 PARAM_MhookHandle       EQU 64          ; HANDLE (8)     = 48+16
+
+        PUBLIC ShellcodeEnd
 
 .code
 
@@ -57,11 +59,11 @@ CallExecute:
         add     rsp, 28h
         pop     rbx
         ret
-ShellcodeEntry ENDP
 
 ; Sentinel: immediately follows ShellcodeEntry so that
 ; (ShellcodeEnd - ShellcodeEntry) gives the code size.
-ShellcodeEnd PROC
-ShellcodeEnd ENDP
+ShellcodeEnd::
+        nop
+ShellcodeEntry ENDP
 
 END
