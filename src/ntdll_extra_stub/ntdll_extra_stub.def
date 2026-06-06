@@ -1,7 +1,6 @@
 LIBRARY ntdll.dll
 EXPORTS
     NtGetNextThread
-    vDbgPrintEx
     LdrLoadDll
     LdrGetProcedureAddress
     _snprintf
