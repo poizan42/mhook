@@ -8,15 +8,6 @@
     <Platform Name="x86" />
   </Configurations>
   <Project Path="libmhook.vcxproj" Id="9af4e83d-3670-44c8-84b9-54ffd4afff21" />
-  <Project Path="mhook-test.vcxproj" Id="0e055caf-c68b-42cb-a302-f775ca5a917f">
-    <BuildType Solution="DebugDynamic|*" Project="Debug" />
-    <BuildType Solution="ReleaseDynamic|*" Project="Release" />
-  </Project>
   <Project Path="ntdll_extra_stub/ntdll_extra_stub.vcxproj" Id="b1e3f8c2-4a5d-4f9e-8b2c-1d6e7a3f9b04" />
-  <Project Path="mhook-unit-tests/mhook-unit-tests.vcxproj" Id="d4a2f8b3-7e1c-4d9a-b5f2-3c8e6a1d0f47">
-    <BuildType Solution="Debug|*"         Project="Debug" />
-    <BuildType Solution="DebugDynamic|*"  Project="DebugDynamic" />
-    <BuildType Solution="Release|*"       Project="Release" />
-    <BuildType Solution="ReleaseDynamic|*" Project="ReleaseDynamic" />
-  </Project>
+  <Project Path="mhook-unit-tests/mhook-unit-tests.vcxproj" Id="d4a2f8b3-7e1c-4d9a-b5f2-3c8e6a1d0f47" />
 </Solution>
