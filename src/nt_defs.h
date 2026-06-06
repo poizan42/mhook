@@ -495,11 +495,5 @@ int __cdecl _vsnprintf(char *Buffer, size_t Count, const char *Format, va_list A
 #endif
 
 #pragma comment(lib, "ntdll.lib")
-// In debug builds, ntdll_extra.lib provides symbols absent from the SDK's
-// ntdll.lib (_snprintf, RtlProcessHeap, etc.) so debug builds have no CRT
-// dependency.
-#ifdef _DEBUG
-#pragma comment(lib, "ntdll_extra.lib")
-#endif
 
 #endif // NT_DEFS_H

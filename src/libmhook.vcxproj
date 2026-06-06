@@ -125,7 +125,7 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <LinkIncremental>true</LinkIncremental>
-    <TargetName>mhook</TargetName>
+    <TargetName>mhook_internal</TargetName>
     <OutDir>$(SolutionDir)\build\artifacts\$(ShortProjectName)\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)\build\obj\$(ShortProjectName)\$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
@@ -137,7 +137,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <LinkIncremental>true</LinkIncremental>
-    <TargetName>mhook</TargetName>
+    <TargetName>mhook_internal</TargetName>
     <OutDir>$(SolutionDir)\build\artifacts\$(ShortProjectName)\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)\build\obj\$(ShortProjectName)\$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
@@ -149,7 +149,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
-    <TargetName>mhook</TargetName>
+    <TargetName>mhook_internal</TargetName>
     <OutDir>$(SolutionDir)\build\artifacts\$(ShortProjectName)\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)\build\obj\$(ShortProjectName)\$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
@@ -161,7 +161,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LinkIncremental>false</LinkIncremental>
-    <TargetName>mhook</TargetName>
+    <TargetName>mhook_internal</TargetName>
     <OutDir>$(SolutionDir)\build\artifacts\$(ShortProjectName)\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)\build\obj\$(ShortProjectName)\$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
@@ -377,4 +377,14 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
+  <!-- Combine the raw archive with ntdll_extra.lib to produce a single self-contained
+       mhook.lib that consumers can link without specifying ntdll_extra.lib separately.
+       Runs only for static library configurations; DLL configs are unaffected. -->
+  <Target Name="CombineWithNtdllExtra"
+          AfterTargets="Lib"
+          Condition="'$(ConfigurationType)'=='StaticLibrary'">
+    <Lib
+      OutputFile="$(OutDir)mhook.lib"
+      Sources="$(OutDir)mhook_internal.lib;$(SolutionDir)build\artifacts\ntdll_extra_stub\$(Platform)\$(Configuration)\ntdll_extra.lib" />
+  </Target>
 </Project>

@@ -302,10 +302,7 @@
   <!-- Build-order dependencies: The companion DLL must exist before the test
        project links.  LinkLibraryDependencies=false prevents MSBuild from
        auto-injecting their outputs as linker inputs; the test uses the
-       companion DLL only at run-time via Win32 APIs.
-       FIXME: Static builds currently needs ntdll_extra.lib because it is a
-              dependency for libmhook. - we should create a library where the
-              imports are included and externally hidden instead. -->
+       companion DLL only at run-time via Win32 APIs. -->
   <ItemGroup>
     <ProjectReference Include="..\libmhook.vcxproj">
       <Project>{9af4e83d-3670-44c8-84b9-54ffd4afff21}</Project>
@@ -316,11 +313,6 @@
       <Project>{F2A7C3B8-91D4-4E6F-A823-5C9B0D7E2F14}</Project>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
       <CopyOutputDll>true</CopyOutputDll>
-    </ProjectReference>
-    <!-- FIXME: Why do dynamic builds still try to link ntdll_extra.lib? -->
-    <!--<ProjectReference Condition="'$(Configuration)' == 'Debug' or '$(Configuration)' == 'Release'" Include="..\ntdll_extra_stub\ntdll_extra_stub.vcxproj">-->
-    <ProjectReference Include="..\ntdll_extra_stub\ntdll_extra_stub.vcxproj">
-      <Project>{b1e3f8c2-4a5d-4f9e-8b2c-1d6e7a3f9b04}</Project>
     </ProjectReference>
   </ItemGroup>
   <!-- Source files: gtest-all.cc compiles the entire googletest library as a single TU -->
