@@ -480,10 +480,12 @@ NTSTATUS NTAPI RtlCharToInteger(PCSZ String, ULONG Base, PULONG Value);
 
 // Debug output
 ULONG NTAPI   DbgPrint(PCSTR Format, ...);
-// vDbgPrintEx takes a fixed va_list argument (not variadic), so it uses the
-// standard __stdcall (NTAPI) calling convention on x86 — verified by
-// disassembling 32-bit ntdll.dll which ends the function with "retn 16".
-ULONG NTAPI   vDbgPrintEx(ULONG ComponentId, ULONG Level, PCSTR Format, va_list arglist);
+// vDbgPrintEx — documented at:
+//   https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/wdm/nf-wdm-vdbgprintex
+// The format parameter is PCCH (const char*, no null-termination SAL annotation) per the
+// WDM docs.  The NTAPI (__stdcall) calling convention is confirmed by the x86 decorated
+// export name _vDbgPrintEx@16 in ntdll.dll (4 args × 4 bytes = 16 bytes of arguments).
+ULONG NTAPI   vDbgPrintEx(ULONG ComponentId, ULONG Level, PCCH Format, va_list arglist);
 
 // ntdll exports its own _snprintf/_vsnprintf (used in preference to the CRT
 // so that debug builds have no CRT dependency).
