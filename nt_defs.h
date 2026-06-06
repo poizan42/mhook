@@ -112,6 +112,19 @@ typedef struct _OBJECT_ATTRIBUTES {
 #endif
 
 // ---------------------------------------------------------------------------
+// ANSI_STRING  (ntdef.h, not winnt.h)
+// ---------------------------------------------------------------------------
+
+#ifndef _ANSI_STRING_DEFINED
+#define _ANSI_STRING_DEFINED
+typedef struct _ANSI_STRING {
+    USHORT Length;
+    USHORT MaximumLength;
+    PCHAR  Buffer;
+} ANSI_STRING, *PANSI_STRING;
+#endif
+
+// ---------------------------------------------------------------------------
 // CLIENT_ID  (ntdef.h, not winnt.h)
 // ---------------------------------------------------------------------------
 
@@ -266,6 +279,44 @@ typedef struct _DESCRIPTOR_TABLE_ENTRY {
 } DESCRIPTOR_TABLE_ENTRY, *PDESCRIPTOR_TABLE_ENTRY;
 
 // ---------------------------------------------------------------------------
+// I/O types  (not in winnt.h; normally from ntdef.h / winternl.h)
+// ---------------------------------------------------------------------------
+
+typedef struct _IO_STATUS_BLOCK {
+    union {
+        NTSTATUS    Status;
+        PVOID       Pointer;
+    };
+    ULONG_PTR   Information;
+} IO_STATUS_BLOCK, *PIO_STATUS_BLOCK;
+
+typedef VOID (NTAPI *PIO_APC_ROUTINE)(
+    PVOID           ApcContext,
+    PIO_STATUS_BLOCK IoStatusBlock,
+    ULONG           Reserved);
+
+// ---------------------------------------------------------------------------
+// RTL_USER_PROCESS_PARAMETERS — minimal layout to reach StandardOutput.
+//
+// Offsets verified against phnt ntrtl.h:
+//   x64: StandardOutput at 0x28  (4×ULONG=0x10, HANDLE=8 → ConsoleHandle@0x10,
+//         ULONG ConsoleFlags@0x18, pad(4), StandardInput@0x20, StandardOutput@0x28)
+//   x86: StandardOutput at 0x1C  (no padding; each HANDLE = 4 bytes)
+// ---------------------------------------------------------------------------
+
+typedef struct _RTL_USER_PROCESS_PARAMETERS_MIN {
+    ULONG   MaximumLength;
+    ULONG   Length;
+    ULONG   Flags;
+    ULONG   DebugFlags;
+    HANDLE  ConsoleHandle;
+    ULONG   ConsoleFlags;
+    HANDLE  StandardInput;
+    HANDLE  StandardOutput;
+    HANDLE  StandardError;
+} RTL_USER_PROCESS_PARAMETERS_MIN, *PRTL_USER_PROCESS_PARAMETERS_MIN;
+
+// ---------------------------------------------------------------------------
 // Debug output constants
 // ---------------------------------------------------------------------------
 
@@ -384,6 +435,35 @@ NTSTATUS NTAPI NtGetNextThread(
 NTSTATUS NTAPI NtDelayExecution(
     BOOLEAN         Alertable,
     PLARGE_INTEGER  DelayInterval);
+
+NTSTATUS NTAPI NtTerminateProcess(
+    HANDLE  ProcessHandle,
+    NTSTATUS ExitStatus);
+
+// I/O
+NTSTATUS NTAPI NtWriteFile(
+    HANDLE          FileHandle,
+    HANDLE          Event,
+    PIO_APC_ROUTINE ApcRoutine,
+    PVOID           ApcContext,
+    PIO_STATUS_BLOCK IoStatusBlock,
+    PVOID           Buffer,
+    ULONG           Length,
+    PLARGE_INTEGER  ByteOffset,
+    PULONG          Key);
+
+// Loader
+NTSTATUS NTAPI LdrLoadDll(
+    PWSTR           SearchPath,
+    PULONG          DllCharacteristics,
+    PUNICODE_STRING DllName,
+    PVOID          *DllHandle);
+
+NTSTATUS NTAPI LdrGetProcedureAddress(
+    PVOID       DllHandle,
+    PANSI_STRING ProcedureName,
+    ULONG       ProcedureNumber,
+    PVOID      *ProcedureAddress);
 
 // Heap  (RtlProcessHeap is a macro above — not an ntdll export)
 PVOID   NTAPI RtlAllocateHeap(PVOID HeapHandle, ULONG Flags, SIZE_T Size);

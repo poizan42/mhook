@@ -99,7 +99,9 @@
   </PropertyGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
-  <ImportGroup Label="ExtensionSettings" />
+  <ImportGroup Label="ExtensionSettings">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.props" />
+  </ImportGroup>
   <ImportGroup Label="Shared" />
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
@@ -309,14 +311,17 @@
     </Link>
   </ItemDefinitionGroup>
 
-  <!-- Build-order dependency on ntdll_extra_stub so ntdll_extra.lib exists when
-       the linker runs.  LinkLibraryDependencies=false prevents MSBuild from
-       auto-injecting the lib as a linker input (which caused "entry point not
-       found in mhook-unit-tests.exe"); the #pragma comment in nt_defs.h
-       resolves it instead via $(OutDir) in AdditionalLibraryDirectories. -->
+  <!-- Build-order dependencies: both ntdll_extra_stub and the companion DLL
+       must exist before the test project links.  LinkLibraryDependencies=false
+       on both prevents MSBuild from auto-injecting their outputs as linker
+       inputs; the test uses the companion DLL only at run-time via Win32 APIs. -->
   <ItemGroup>
     <ProjectReference Include="..\ntdll_extra_stub\ntdll_extra_stub.vcxproj">
       <Project>{B1E3F8C2-4A5D-4F9E-8B2C-1D6E7A3F9B04}</Project>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
+    <ProjectReference Include="..\mhook_test_uninitialized_inject\mhook_test_uninitialized_inject.vcxproj">
+      <Project>{F2A7C3B8-91D4-4E6F-A823-5C9B0D7E2F14}</Project>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
     </ProjectReference>
   </ItemGroup>
@@ -338,6 +343,18 @@
 
     <!-- Test source -->
     <ClCompile Include="tests.cpp" />
+    <ClCompile Include="uninit_test.cpp" />
+  </ItemGroup>
+
+  <!-- MASM shellcode: each file only assembles for its matching platform -->
+  <ItemGroup>
+    <MASM Include="shellcode_x64.asm">
+      <ExcludedFromBuild Condition="'$(Platform)'!='x64'">true</ExcludedFromBuild>
+    </MASM>
+    <MASM Include="shellcode_x86.asm">
+      <ExcludedFromBuild Condition="'$(Platform)'!='Win32'">true</ExcludedFromBuild>
+      <UseSafeExceptionHandlers>true</UseSafeExceptionHandlers>
+    </MASM>
   </ItemGroup>
 
   <ItemGroup>
@@ -347,5 +364,7 @@
 
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
-  <ImportGroup Label="ExtensionTargets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.targets" />
+  </ImportGroup>
 </Project>

@@ -18,6 +18,22 @@ NTSTATUS NTAPI NtGetNextThread(
     return STATUS_NOT_IMPLEMENTED;
 }
 
+NTSTATUS NTAPI LdrLoadDll(
+    PWSTR SearchPath, PULONG DllCharacteristics,
+    PUNICODE_STRING DllName, PVOID *DllHandle)
+{
+    (void)SearchPath; (void)DllCharacteristics; (void)DllName; (void)DllHandle;
+    return STATUS_NOT_IMPLEMENTED;
+}
+
+NTSTATUS NTAPI LdrGetProcedureAddress(
+    PVOID DllHandle, PANSI_STRING ProcedureName,
+    ULONG ProcedureNumber, PVOID *ProcedureAddress)
+{
+    (void)DllHandle; (void)ProcedureName; (void)ProcedureNumber; (void)ProcedureAddress;
+    return STATUS_NOT_IMPLEMENTED;
+}
+
 ULONG __cdecl vDbgPrintEx(
     ULONG   ComponentId,
     ULONG   Level,
