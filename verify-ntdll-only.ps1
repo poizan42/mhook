@@ -251,7 +251,7 @@ $passed = 0; $failed = 0; $skipped = 0
 
 foreach ($cfg in $configs) {
     $ext   = if ($cfg.IsLib) { 'lib' } else { 'dll' }
-    $file  = Join-Path $SolutionDir "$($cfg.Arch)\$($cfg.Config)\mhook.$ext"
+    $file  = Join-Path $SolutionDir build artifacts libmhook $cfg.Arch $cfg.Config "mhook.$ext"
     $label = "$($cfg.Config)|$($cfg.Arch)".PadRight(22)
 
     if (-not (Test-Path $file)) {
@@ -267,7 +267,7 @@ foreach ($cfg in $configs) {
             catch { Write-Error $_.Exception.Message; exit 1 }
         }
         $sdkNtdll     = $sdkLibCache[$cfg.Arch]
-        $ntdllExtraLib = Join-Path $SolutionDir "$($cfg.Arch)\$($cfg.Config)\ntdll_extra.lib"
+        $ntdllExtraLib = Join-Path $SolutionDir build artifacts ntdll_extra_stub "$($cfg.Arch)\$($cfg.Config)\ntdll_extra.lib"
 
         if (-not (Test-Path $ntdllExtraLib)) {
             Write-Host "  SKIP    $label  (ntdll_extra.lib not found: $ntdllExtraLib)"

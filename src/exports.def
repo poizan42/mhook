@@ -1,0 +1,4 @@
+LIBRARY   MHOOK
+EXPORTS
+   Mhook_SetHook
+   Mhook_Unhook

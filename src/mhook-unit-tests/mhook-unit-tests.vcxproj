@@ -133,7 +133,7 @@
   </PropertyGroup>
   <!-- gtest needs to locate its own internal headers via the src/ directory -->
   <PropertyGroup>
-    <GTestRoot>$(ProjectDir)..\third_party\googletest\googletest</GTestRoot>
+    <GTestRoot>$(SolutionDir)third_party\googletest\googletest</GTestRoot>
   </PropertyGroup>
   <!-- Debug configurations -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
