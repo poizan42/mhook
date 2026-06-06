@@ -303,14 +303,20 @@ TEST(MhookTest, UninitializedProcess_HookFiresBeforeInit)
     std::string output;
     struct ReadState { HANDLE pipe; std::string *out; };
     ReadState rs = { hReadPipe, &output };
-    HANDLE hReadThread = CreateThread(NULL, 0, [](LPVOID p) -> DWORD {
-        ReadState *rs = (ReadState *)p;
-        char tmp[1024];
-        DWORD got;
-        while (ReadFile(rs->pipe, tmp, sizeof(tmp), &got, NULL) && got > 0)
-            rs->out->append(tmp, got);
-        return 0;
-    }, &rs, 0, NULL);
+
+    // Named WINAPI function avoids an ESP mismatch on x86: lambdas have
+    // __cdecl convention but LPTHREAD_START_ROUTINE requires __stdcall.
+    struct ReadThread {
+        static DWORD WINAPI Run(LPVOID p) {
+            ReadState *rs = static_cast<ReadState *>(p);
+            char tmp[1024];
+            DWORD got;
+            while (ReadFile(rs->pipe, tmp, sizeof(tmp), &got, NULL) && got > 0)
+                rs->out->append(tmp, got);
+            return 0;
+        }
+    };
+    HANDLE hReadThread = CreateThread(NULL, 0, ReadThread::Run, &rs, 0, NULL);
 
     if (hReadThread) {
         WaitForSingleObject(hReadThread, 15000);

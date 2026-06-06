@@ -34,7 +34,7 @@ NTSTATUS NTAPI LdrGetProcedureAddress(
     return STATUS_NOT_IMPLEMENTED;
 }
 
-ULONG __cdecl vDbgPrintEx(
+ULONG NTAPI vDbgPrintEx(
     ULONG   ComponentId,
     ULONG   Level,
     PCSTR   Format,

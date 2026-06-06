@@ -480,7 +480,10 @@ NTSTATUS NTAPI RtlCharToInteger(PCSZ String, ULONG Base, PULONG Value);
 
 // Debug output
 ULONG NTAPI   DbgPrint(PCSTR Format, ...);
-ULONG __cdecl vDbgPrintEx(ULONG ComponentId, ULONG Level, PCSTR Format, va_list arglist);
+// vDbgPrintEx takes a fixed va_list argument (not variadic), so it uses the
+// standard __stdcall (NTAPI) calling convention on x86 — verified by
+// disassembling 32-bit ntdll.dll which ends the function with "retn 16".
+ULONG NTAPI   vDbgPrintEx(ULONG ComponentId, ULONG Level, PCSTR Format, va_list arglist);
 
 // ntdll exports its own _snprintf/_vsnprintf (used in preference to the CRT
 // so that debug builds have no CRT dependency).
