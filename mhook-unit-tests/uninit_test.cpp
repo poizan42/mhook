@@ -188,7 +188,11 @@ TEST(MhookTest, UninitializedProcess_HookFiresBeforeInit)
         (ULONG_PTR)pLocalLdrLoadDll - (ULONG_PTR)hLocalNtdll;
 
     // --- Determine build variant ---
-    bool isDynamic = (GetFileAttributesW(mhookPath.c_str()) != INVALID_FILE_ATTRIBUTES);
+#ifdef MHOOK_STATIC
+    bool isDynamic = false;
+#else
+    bool isDynamic = true;
+#endif
 
     // --- Create stdout/stderr pipe ---
     SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
@@ -327,11 +331,17 @@ TEST(MhookTest, UninitializedProcess_HookFiresBeforeInit)
 
     // --- Cleanup ---
     WaitForSingleObject(pi.hProcess, 5000);
+    DWORD processExitCode = 0;
+    GetExitCodeProcess(pi.hProcess, &processExitCode);
     TerminateProcess(pi.hProcess, 1);
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
     CloseHandle(hReadPipe);
 
     EXPECT_TRUE(markerFound)
-        << "Hook did not fire. Process output: " << output;
+        << "Hook did not fire."
+        << " Process exit code: 0x" << std::hex << processExitCode
+        << "  (0=LdrLoadDll failed)"
+        << "  remoteLdrLoadDll=" << (void*)remoteLdrLoadDll
+        << "  Output: [" << output << "]";
 }

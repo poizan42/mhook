@@ -34,16 +34,13 @@
       <Platform>x64</Platform>
     </ProjectConfiguration>
   </ItemGroup>
-
   <PropertyGroup Label="Globals">
     <ProjectGuid>{D4A2F8B3-7E1C-4D9A-B5F2-3C8E6A1D0F47}</ProjectGuid>
     <RootNamespace>mhook_unit_tests</RootNamespace>
     <Keyword>Win32Proj</Keyword>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
-
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
@@ -97,7 +94,6 @@
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
     <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.props" />
@@ -127,9 +123,7 @@
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='ReleaseDynamic|x64'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
-
   <PropertyGroup Label="UserMacros" />
-
   <!-- Output layout mirrors mhook-test -->
   <PropertyGroup>
     <OutDir Condition="'$(Platform)'=='Win32'">$(SolutionDir)$(Platform)\$(Configuration)\</OutDir>
@@ -137,19 +131,17 @@
     <OutDir Condition="'$(Platform)'=='x64'">$(SolutionDir)x64\$(Configuration)\</OutDir>
     <IntDir Condition="'$(Platform)'=='x64'">x64\$(Configuration)\mhook-unit-tests\</IntDir>
   </PropertyGroup>
-
   <!-- gtest needs to locate its own internal headers via the src/ directory -->
   <PropertyGroup>
     <GTestRoot>$(ProjectDir)..\third_party\googletest\googletest</GTestRoot>
   </PropertyGroup>
-
   <!-- Debug configurations -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;MHOOK_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalIncludeDirectories>$(GTestRoot)\include;$(GTestRoot);$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -167,7 +159,7 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;MHOOK_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalIncludeDirectories>$(GTestRoot)\include;$(GTestRoot);$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -180,7 +172,6 @@
       <TargetMachine>MachineX64</TargetMachine>
     </Link>
   </ItemDefinitionGroup>
-
   <!-- DebugDynamic = Debug settings -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='DebugDynamic|Win32'">
     <ClCompile>
@@ -218,7 +209,6 @@
       <TargetMachine>MachineX64</TargetMachine>
     </Link>
   </ItemDefinitionGroup>
-
   <!-- Release configurations -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
@@ -227,7 +217,7 @@
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;MHOOK_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalIncludeDirectories>$(GTestRoot)\include;$(GTestRoot);$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -249,7 +239,7 @@
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;MHOOK_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <LanguageStandard>stdcpp17</LanguageStandard>
       <AdditionalIncludeDirectories>$(GTestRoot)\include;$(GTestRoot);$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -264,7 +254,6 @@
       <TargetMachine>MachineX64</TargetMachine>
     </Link>
   </ItemDefinitionGroup>
-
   <!-- ReleaseDynamic = Release settings -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='ReleaseDynamic|Win32'">
     <ClCompile>
@@ -310,7 +299,6 @@
       <TargetMachine>MachineX64</TargetMachine>
     </Link>
   </ItemDefinitionGroup>
-
   <!-- Build-order dependencies: both ntdll_extra_stub and the companion DLL
        must exist before the test project links.  LinkLibraryDependencies=false
        on both prevents MSBuild from auto-injecting their outputs as linker
@@ -325,7 +313,6 @@
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
     </ProjectReference>
   </ItemGroup>
-
   <!-- Source files: gtest-all.cc compiles the entire googletest library as a single TU -->
   <ItemGroup>
     <!-- Google Test — compiled inline, no separate gtest project needed -->
@@ -333,19 +320,16 @@
       <!-- gtest itself only needs C++14; suppress its own warnings cleanly -->
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
     </ClCompile>
-
     <!-- mhook library sources — compiled directly so tests run in-process -->
     <ClCompile Include="..\mhook-lib\mhook.cpp" />
     <ClCompile Include="..\disasm-lib\cpu.c" />
     <ClCompile Include="..\disasm-lib\disasm.c" />
     <ClCompile Include="..\disasm-lib\disasm_x86.c" />
     <ClCompile Include="..\disasm-lib\misc.c" />
-
     <!-- Test source -->
     <ClCompile Include="tests.cpp" />
     <ClCompile Include="uninit_test.cpp" />
   </ItemGroup>
-
   <!-- MASM shellcode: each file only assembles for its matching platform -->
   <ItemGroup>
     <MASM Include="uninit_test_shellcode_x64.asm">
@@ -356,13 +340,10 @@
       <UseSafeExceptionHandlers>true</UseSafeExceptionHandlers>
     </MASM>
   </ItemGroup>
-
   <ItemGroup>
     <ClInclude Include="..\mhook-lib\mhook.h" />
     <ClInclude Include="..\nt_defs.h" />
   </ItemGroup>
-
-
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
     <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.targets" />
