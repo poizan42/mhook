@@ -95,7 +95,7 @@ $results = @()
 
 foreach ($cfg in $configs) {
     $label    = "$($cfg.MSBuildConfig)|$($cfg.OutArch)"
-    $testExe  = Join-Path $SolutionDir "$($cfg.OutDir)\mhook-unit-tests.exe"
+    $testExe  = Join-Path $SolutionDir "build" "artifacts" "mhook-unit-tests" $cfg.OutDir "mhook-unit-tests.exe"
 
     $buildStatus = $null
     $testStatus  = $null

@@ -126,10 +126,10 @@
   <PropertyGroup Label="UserMacros" />
   <!-- Output layout mirrors mhook-test -->
   <PropertyGroup>
-    <OutDir Condition="'$(Platform)'=='Win32'">$(SolutionDir)$(Platform)\$(Configuration)\</OutDir>
-    <IntDir Condition="'$(Platform)'=='Win32'">$(Platform)\$(Configuration)\mhook-unit-tests\</IntDir>
-    <OutDir Condition="'$(Platform)'=='x64'">$(SolutionDir)x64\$(Configuration)\</OutDir>
-    <IntDir Condition="'$(Platform)'=='x64'">x64\$(Configuration)\mhook-unit-tests\</IntDir>
+    <OutDir Condition="'$(Platform)'=='Win32'">$(SolutionDir)\build\artifacts\$(ShortProjectName)\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir Condition="'$(Platform)'=='Win32'">$(SolutionDir)\build\obj\$(ShortProjectName)\$(Platform)\$(Configuration)\</IntDir>
+    <OutDir Condition="'$(Platform)'=='x64'">$(SolutionDir)\build\artifacts\$(ShortProjectName)\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir Condition="'$(Platform)'=='x64'">$(SolutionDir)\build\obj\$(ShortProjectName)\$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
   <!-- gtest needs to locate its own internal headers via the src/ directory -->
   <PropertyGroup>
@@ -299,18 +299,28 @@
       <TargetMachine>MachineX64</TargetMachine>
     </Link>
   </ItemDefinitionGroup>
-  <!-- Build-order dependencies: both ntdll_extra_stub and the companion DLL
-       must exist before the test project links.  LinkLibraryDependencies=false
-       on both prevents MSBuild from auto-injecting their outputs as linker
-       inputs; the test uses the companion DLL only at run-time via Win32 APIs. -->
+  <!-- Build-order dependencies: The companion DLL must exist before the test
+       project links.  LinkLibraryDependencies=false prevents MSBuild from
+       auto-injecting their outputs as linker inputs; the test uses the
+       companion DLL only at run-time via Win32 APIs.
+       FIXME: Static builds currently needs ntdll_extra.lib because it is a
+              dependency for libmhook. - we should create a library where the
+              imports are included and externally hidden instead. -->
   <ItemGroup>
-    <ProjectReference Include="..\ntdll_extra_stub\ntdll_extra_stub.vcxproj">
-      <Project>{B1E3F8C2-4A5D-4F9E-8B2C-1D6E7A3F9B04}</Project>
-      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    <ProjectReference Include="..\libmhook.vcxproj">
+      <Project>{9af4e83d-3670-44c8-84b9-54ffd4afff21}</Project>
+      <!-- See custom CopyProjectReferenceDlls target at the end -->
+      <CopyOutputDll>true</CopyOutputDll>
     </ProjectReference>
     <ProjectReference Include="..\mhook_test_uninitialized_inject\mhook_test_uninitialized_inject.vcxproj">
       <Project>{F2A7C3B8-91D4-4E6F-A823-5C9B0D7E2F14}</Project>
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
+      <CopyOutputDll>true</CopyOutputDll>
+    </ProjectReference>
+    <!-- FIXME: Why do dynamic builds still try to link ntdll_extra.lib? -->
+    <!--<ProjectReference Condition="'$(Configuration)' == 'Debug' or '$(Configuration)' == 'Release'" Include="..\ntdll_extra_stub\ntdll_extra_stub.vcxproj">-->
+    <ProjectReference Include="..\ntdll_extra_stub\ntdll_extra_stub.vcxproj">
+      <Project>{b1e3f8c2-4a5d-4f9e-8b2c-1d6e7a3f9b04}</Project>
     </ProjectReference>
   </ItemGroup>
   <!-- Source files: gtest-all.cc compiles the entire googletest library as a single TU -->
@@ -348,4 +358,40 @@
   <ImportGroup Label="ExtensionTargets">
     <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.targets" />
   </ImportGroup>
+
+  <!-- Copy DLLs from project references marked with CopyOutputDll=true -->
+  <Target Name="CopyProjectReferenceDlls" AfterTargets="Build">
+
+    <!-- Step 1: Filter using qualified metadata syntax -->
+    <ItemGroup>
+      <_ProjectRefsToCopy Include="@(ProjectReference)"
+                           Condition="'%(ProjectReference.CopyOutputDll)' == 'true'" />
+    </ItemGroup>
+
+    <!-- Step 2: Call GetTargetPath on each filtered reference -->
+    <MSBuild Projects="@(_ProjectRefsToCopy)"
+             Targets="GetTargetPath"
+             Properties="Configuration=$(Configuration);Platform=$(Platform)">
+      <Output TaskParameter="TargetOutputs" ItemName="_ReferencedDllPaths" />
+    </MSBuild>
+
+    <!-- Step 3: Build a list of .dll and .pdb paths -->
+    <ItemGroup>
+      <!-- Include the DLLs themselves -->
+      <_FilesToCopy Include="@(_ReferencedDllPaths)"
+                    Condition="'%(_ReferencedDllPaths.Extension)' == '.dll'" />
+
+      <!-- Derive the .pdb path by replacing .dll with .pdb -->
+      <_FilesToCopy Include="@(_ReferencedDllPaths->'%(RootDir)%(Directory)%(Filename).pdb')"
+                    Condition="'%(_ReferencedDllPaths.Extension)' == '.dll'" />
+    </ItemGroup>
+
+    <!-- Step 4: Copy only files that actually exist on disk -->
+    <Copy SourceFiles="@(_FilesToCopy)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('%(_FilesToCopy.RootDir)%(_FilesToCopy.Directory)%(_FilesToCopy.Filename)%(_FilesToCopy.Extension)')"
+  />
+
+  </Target>
 </Project>
