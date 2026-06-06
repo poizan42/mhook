@@ -18,6 +18,8 @@
 #include <gtest/gtest.h>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <psapi.h>      // GetMappedFileNameW
+#pragma comment(lib, "psapi.lib")
 #include <string>
 
 // ---------------------------------------------------------------------------
@@ -79,6 +81,60 @@ extern "C" void ShellcodeEnd();
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Walk the virtual address space of hProcess and return the AllocationBase of
+// the first MEM_IMAGE mapping whose filename (last path component) matches
+// targetName (case-insensitive).
+//
+// We enumerate rather than re-using our own ntdll base because Windows ASLR
+// currently gives ntdll one fixed VA per boot, but that is an implementation
+// detail that Microsoft may change.  A newly-created suspended process always
+// has ntdll mapped; if it is not found the assumption that hooks can be
+// installed before the process initialises does not hold.
+static ULONG_PTR FindDllBaseInProcess(HANDLE hProcess, const wchar_t *targetName)
+{
+    MEMORY_BASIC_INFORMATION mbi;
+    ULONG_PTR addr = 0;
+    wchar_t mappedPath[2048];
+
+    while (VirtualQueryEx(hProcess, reinterpret_cast<LPCVOID>(addr),
+                          &mbi, sizeof(mbi)) == sizeof(mbi))
+    {
+        // Examine only the first region of each mapped image (where
+        // BaseAddress == AllocationBase).  Other regions of the same image
+        // share the same AllocationBase and would give the same file name.
+        if (mbi.Type == MEM_IMAGE &&
+            mbi.BaseAddress == mbi.AllocationBase &&
+            GetMappedFileNameW(hProcess, mbi.AllocationBase,
+                               mappedPath, (DWORD)std::size(mappedPath)) > 0)
+        {
+            // GetMappedFileNameW returns a device path; extract the filename.
+            std::wstring_view full(mappedPath);
+            auto slash = full.rfind(L'\\');
+            std::wstring_view name = (slash == std::wstring_view::npos)
+                                     ? full : full.substr(slash + 1);
+
+            // Case-insensitive compare.
+            if (name.size() == wcslen(targetName)) {
+                bool match = true;
+                for (size_t i = 0; i < name.size(); ++i) {
+                    if (towlower(name[i]) != towlower(targetName[i])) {
+                        match = false;
+                        break;
+                    }
+                }
+                if (match)
+                    return reinterpret_cast<ULONG_PTR>(mbi.AllocationBase);
+            }
+        }
+
+        ULONG_PTR next = reinterpret_cast<ULONG_PTR>(mbi.BaseAddress)
+                         + mbi.RegionSize;
+        if (next <= addr) break;   // overflow / end of address space
+        addr = next;
+    }
+    return 0;
+}
+
 // Returns the full path of the running executable without any MAX_PATH limit.
 static std::wstring GetExeDir()
 {
@@ -118,12 +174,18 @@ TEST(MhookTest, UninitializedProcess_HookFiresBeforeInit)
     ULONG_PTR executeOffset = (ULONG_PTR)pExecute - (ULONG_PTR)hCompanion;
     FreeLibrary(hCompanion);
 
-    // --- Resolve LdrLoadDll (same VA in every process on this boot) ---
-    HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
-    ASSERT_NE(hNtdll, (HMODULE)NULL);
-    LdrLoadDllFn pfnLdrLoadDll =
-        (LdrLoadDllFn)GetProcAddress(hNtdll, "LdrLoadDll");
-    ASSERT_NE(pfnLdrLoadDll, (LdrLoadDllFn)NULL);
+    // --- Compute LdrLoadDll's offset within ntdll in this process ---
+    // We will later resolve its address in the remote process by finding where
+    // ntdll is mapped there and adding this offset.  This is more robust than
+    // assuming ntdll is at the same VA in both processes: Windows ASLR currently
+    // gives one fixed ntdll base per boot, but that is an implementation detail
+    // that may change.
+    HMODULE hLocalNtdll = GetModuleHandleW(L"ntdll.dll");
+    ASSERT_NE(hLocalNtdll, (HMODULE)NULL);
+    FARPROC pLocalLdrLoadDll = GetProcAddress(hLocalNtdll, "LdrLoadDll");
+    ASSERT_NE(pLocalLdrLoadDll, (FARPROC)NULL);
+    ULONG_PTR ldrLoadDllOffset =
+        (ULONG_PTR)pLocalLdrLoadDll - (ULONG_PTR)hLocalNtdll;
 
     // --- Determine build variant ---
     bool isDynamic = (GetFileAttributesW(mhookPath.c_str()) != INVALID_FILE_ATTRIBUTES);
@@ -159,6 +221,19 @@ TEST(MhookTest, UninitializedProcess_HookFiresBeforeInit)
         GTEST_SKIP() << "Could not create cmd.exe (" << GetLastError() << ")";
     }
 
+    // --- Find ntdll in the remote process and compute remote LdrLoadDll ---
+    // ntdll is always mapped before any thread runs (it is the loader), so
+    // searching the suspended process's address space is safe.
+    ULONG_PTR remoteNtdllBase = FindDllBaseInProcess(pi.hProcess, L"ntdll.dll");
+    if (remoteNtdllBase == 0) {
+        TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+        CloseHandle(hReadPipe);   CloseHandle(hWritePipe);
+        FAIL() << "ntdll.dll not found in remote process address space";
+    }
+    LdrLoadDllFn remoteLdrLoadDll =
+        reinterpret_cast<LdrLoadDllFn>(remoteNtdllBase + ldrLoadDllOffset);
+
     // --- Build the remote memory layout ---
     //
     //   [shellcode bytes]                   (codeSize)
@@ -187,7 +262,7 @@ TEST(MhookTest, UninitializedProcess_HookFiresBeforeInit)
 
     // --- Fill in ShellcodeParams ---
     ShellcodeParams params = {};
-    params.LdrLoadDll    = pfnLdrLoadDll;
+    params.LdrLoadDll    = remoteLdrLoadDll;
     params.ExecuteOffset = executeOffset;
     params.IsDynamic     = isDynamic ? 1u : 0u;
 
