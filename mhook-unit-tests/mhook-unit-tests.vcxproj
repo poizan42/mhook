@@ -348,10 +348,10 @@
 
   <!-- MASM shellcode: each file only assembles for its matching platform -->
   <ItemGroup>
-    <MASM Include="shellcode_x64.asm">
+    <MASM Include="uninit_test_shellcode_x64.asm">
       <ExcludedFromBuild Condition="'$(Platform)'!='x64'">true</ExcludedFromBuild>
     </MASM>
-    <MASM Include="shellcode_x86.asm">
+    <MASM Include="uninit_test_shellcode_x86.asm">
       <ExcludedFromBuild Condition="'$(Platform)'!='Win32'">true</ExcludedFromBuild>
       <UseSafeExceptionHandlers>true</UseSafeExceptionHandlers>
     </MASM>
