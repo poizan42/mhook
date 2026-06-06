@@ -3,25 +3,19 @@
 ; Called as:  DWORD WINAPI ShellcodeEntry(LPVOID lpParam)  (__stdcall)
 ;   [EBP+8] = pointer to ShellcodeParams (see uninit_test.cpp)
 ;
-; .model flat, C causes MASM to prepend '_' to all PROC names so the symbols
-; match the names expected by extern "C" declarations in C/C++ source.
-; Calling convention is handled manually: we use "ret 4" to clean lpParam
-; (4 bytes) from the stack as required by __stdcall.
-;
 ; ShellcodeParams field offsets (x86) — must match the C struct in uninit_test.cpp.
-; UNICODE_STRING is 8 bytes on x86 (2+2+4).  WCHAR[MAX_PATH]=520 bytes.
-; ULONG_PTR / HANDLE = 4 bytes on x86.
+; Path strings are written AFTER the struct in the same remote allocation;
+; UNICODE_STRING.Buffer pointers are set by the test to those remote addresses.
+; UNICODE_STRING is 8 bytes on x86 (2+2+4).  ULONG_PTR / HANDLE = 4 bytes.
 ;
 PARAM_LdrLoadDll        EQU 0           ; ULONG_PTR (4)
 PARAM_CompanionPath     EQU 4           ; UNICODE_STRING (8)
-PARAM_CompanionBuf      EQU 12          ; WCHAR[260] (520)  offset = 4+8
-PARAM_CompanionHandle   EQU 532         ; HANDLE (4)        offset = 12+520
-PARAM_ExecuteOffset     EQU 536         ; ULONG_PTR (4)
-PARAM_IsDynamic         EQU 540         ; ULONG (4)
-PARAM__pad              EQU 544         ; ULONG (4, alignment pad)
-PARAM_MhookPath         EQU 548         ; UNICODE_STRING (8)
-PARAM_MhookBuf          EQU 556         ; WCHAR[260] (520)  offset = 548+8
-PARAM_MhookHandle       EQU 1076        ; HANDLE (4)        offset = 556+520
+PARAM_CompanionHandle   EQU 12          ; HANDLE (4)     = 4+8
+PARAM_ExecuteOffset     EQU 16          ; ULONG_PTR (4)
+PARAM_IsDynamic         EQU 20          ; ULONG (4)
+PARAM__pad              EQU 24          ; ULONG (4, alignment pad)
+PARAM_MhookPath         EQU 28          ; UNICODE_STRING (8)
+PARAM_MhookHandle       EQU 36          ; HANDLE (4)     = 28+8
 
 .686
 .model flat, C      ; 'C' language: MASM adds '_' prefix to all PROC names

@@ -3,35 +3,31 @@
 ; Called as:  DWORD WINAPI ShellcodeEntry(LPVOID lpParam)
 ;   RCX = pointer to ShellcodeParams (see uninit_test.cpp)
 ;
-; The function loads the companion DLL (and optionally mhook.dll) via
-; LdrLoadDll, then calls Execute(hMhook).
-;
 ; ShellcodeParams field offsets (x64) — must match the C struct in uninit_test.cpp.
-; UNICODE_STRING is 16 bytes on x64 (2+2+4pad+8).  WCHAR[MAX_PATH]=520 bytes.
+; Path strings are written AFTER the struct in the same remote allocation;
+; UNICODE_STRING.Buffer pointers are set by the test to those remote addresses.
+; UNICODE_STRING is 16 bytes on x64 (2+2+4pad+8).
 ;
 PARAM_LdrLoadDll        EQU 0           ; ULONG_PTR (8)
 PARAM_CompanionPath     EQU 8           ; UNICODE_STRING (16)
-PARAM_CompanionBuf      EQU 24          ; WCHAR[260] (520)  offset = 8+16
-PARAM_CompanionHandle   EQU 544         ; HANDLE (8)        offset = 24+520
-PARAM_ExecuteOffset     EQU 552         ; ULONG_PTR (8)
-PARAM_IsDynamic         EQU 560         ; ULONG (4)
-PARAM_MhookPath         EQU 568         ; UNICODE_STRING (16)  offset = 560+4pad+4
-PARAM_MhookBuf          EQU 584         ; WCHAR[260] (520)  offset = 568+16
-PARAM_MhookHandle       EQU 1104        ; HANDLE (8)        offset = 584+520
+PARAM_CompanionHandle   EQU 24          ; HANDLE (8)     = 8+16
+PARAM_ExecuteOffset     EQU 32          ; ULONG_PTR (8)
+PARAM_IsDynamic         EQU 40          ; ULONG (4)
+PARAM__pad              EQU 44          ; ULONG (4, alignment)
+PARAM_MhookPath         EQU 48          ; UNICODE_STRING (16)
+PARAM_MhookHandle       EQU 64          ; HANDLE (8)     = 48+16
 
 .code
 
 ; ---------------------------------------------------------------------------
 ShellcodeEntry PROC
-        ; Standard x64 prolog: preserve RBX (non-volatile), allocate shadow space.
         push    rbx
-        sub     rsp, 28h            ; 32-byte shadow space + 8 for alignment
+        sub     rsp, 28h            ; shadow space + alignment
 
-        mov     rbx, rcx            ; save ShellcodeParams* across calls
+        mov     rbx, rcx            ; save ShellcodeParams*
 
         ; --- Load companion DLL ---
-        ; LdrLoadDll(SearchPath=NULL, Characteristics=NULL,
-        ;            DllName=&params.CompanionPath, DllHandle=&params.CompanionHandle)
+        ; LdrLoadDll(NULL, NULL, &CompanionPath, &CompanionHandle)
         xor     ecx, ecx
         xor     edx, edx
         lea     r8,  [rbx + PARAM_CompanionPath]
@@ -63,8 +59,8 @@ CallExecute:
         ret
 ShellcodeEntry ENDP
 
-; Sentinel label immediately after ShellcodeEntry.
-; Used by the test to compute sizeof(shellcode) = ShellcodeEnd - ShellcodeEntry.
+; Sentinel: immediately follows ShellcodeEntry so that
+; (ShellcodeEnd - ShellcodeEntry) gives the code size.
 ShellcodeEnd PROC
 ShellcodeEnd ENDP
 
