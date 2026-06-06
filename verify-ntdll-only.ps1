@@ -10,25 +10,15 @@
         other than ntdll.dll appears.
 
     Static lib outputs (Debug, Release x x64, Win32):
-        Reads the symbol table via dumpbin /symbols, collects every external
-        symbol that is referenced but not defined within the lib itself,
-        strips x86 calling-convention decoration, and fails if any such symbol
-        is not exported by the system ntdll.dll.
+        Links the .lib into a temporary DLL using only ntdll.lib and
+        ntdll_extra.lib, then inspects that DLL's import table.  This works
+        for both normal and LTCG/WPO (/GL) objects and catches dependencies
+        independently of the DLL configurations.
 
-    x86 decoration rules (applied only for Win32 libs; x64 has no decoration):
+    x86 decoration rules used when reporting unresolved symbols from the
+    link step:
         _Name@N  (stdcall)  ->  Name
-        _Name    (cdecl)    ->  Name   (public names beginning with '_' get a
-                                        second leading underscore on x86, so
-                                        __snprintf -> _snprintf correctly)
-
-    Linker-defined symbols that are always resolved by the linker itself
-    (not from any import lib) are whitelisted:
-        __ImageBase  -  the PE image base address pseudo-symbol
-
-    Release static libs built with WholeProgramOptimization (/GL) produce
-    LTCG objects whose symbol tables are not readable by dumpbin /symbols.
-    These are reported as INFO and the ReleaseDynamic DLL is relied upon
-    instead for release-build coverage.
+        _Name    (cdecl)    ->  Name
 
 .PARAMETER SolutionDir
     Root of the mhook repository.  Defaults to the directory containing
@@ -47,20 +37,64 @@ Set-StrictMode -Version 3
 $ErrorActionPreference = 'Continue'
 
 # ---------------------------------------------------------------------------
-# Locate dumpbin.exe from the latest VS installation
+# Locate VS tools using the canonical vswhere method (see
+# https://github.com/microsoft/vswhere/wiki/Find-VC):
+#   1. vswhere gives the VS installation path.
+#   2. VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt contains the
+#      exact toolset version string that matches what the build actually used.
+#   3. Tools live at VC\Tools\MSVC\<version>\bin\Host<host>\<target>\<tool>.
+#
+# dumpbin and the x64-targeting link.exe are from Hostx64\x64.
+# The x86-targeting link.exe comes from Hostx64\x86 (cross: host x64 -> x86).
+# Using the version from the .txt file is critical for LTCG: the linker
+# back-end (c2.exe / P2) must match the front-end version baked into the
+# .obj files, or you get C1900 "Il mismatch between P1 and P2".
 # ---------------------------------------------------------------------------
-function Find-Dumpbin {
+function Find-VsTools {
     $vsWhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
     if (-not (Test-Path $vsWhere)) { throw "vswhere.exe not found at $vsWhere" }
 
-    $vsPath = & $vsWhere -latest -property installationPath 2>$null
-    $exe = Get-ChildItem (Join-Path $vsPath 'VC\Tools\MSVC') 'dumpbin.exe' -Recurse `
+    $vsPath = & $vsWhere -latest -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath 2>$null
+
+    if (-not $vsPath) { throw "vswhere: no VS installation with VC tools found" }
+
+    $versionFile = Join-Path $vsPath 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt'
+    if (-not (Test-Path $versionFile)) { throw "Toolset version file not found: $versionFile" }
+
+    $toolsVersion = (Get-Content $versionFile -Raw).Trim()
+    $hostBin = Join-Path $vsPath "VC\Tools\MSVC\$toolsVersion\bin\Hostx64"
+
+    return @{
+        Dumpbin = Join-Path $hostBin 'x64\dumpbin.exe'
+        LinkX64 = Join-Path $hostBin 'x64\link.exe'   # native x64
+        LinkX86 = Join-Path $hostBin 'x86\link.exe'   # cross: host x64, target x86
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Locate the Windows SDK ntdll.lib for a given architecture
+# ---------------------------------------------------------------------------
+function Find-SdkNtdllLib([string]$Arch) {
+    $libArch = if ($Arch -eq 'x64') { 'x64' } else { 'x86' }
+
+    # Prefer the registry-provided kits root; fall back to the standard path.
+    $kitsRoot = (Get-ItemProperty `
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows Kits\Installed Roots' `
+        -ErrorAction SilentlyContinue).'KitsRoot10'
+    if (-not $kitsRoot) {
+        $kitsRoot = 'C:\Program Files (x86)\Windows Kits\10\'
+    }
+
+    $lib = Get-ChildItem (Join-Path $kitsRoot 'Lib') 'ntdll.lib' -Recurse `
                -ErrorAction SilentlyContinue |
-           Where-Object { $_.DirectoryName -like '*Hostx64\x64*' } |
+           Where-Object { $_.DirectoryName -like "*\um\$libArch" } |
+           Sort-Object { $_.DirectoryName } -Descending |
            Select-Object -First 1 -ExpandProperty FullName
 
-    if (-not $exe) { throw "dumpbin.exe not found under $vsPath" }
-    return $exe
+    if (-not $lib) { throw "SDK ntdll.lib not found for $Arch under $kitsRoot" }
+    return $lib
 }
 
 # ---------------------------------------------------------------------------
@@ -70,9 +104,8 @@ function Get-NtdllExports([string]$Dumpbin) {
     $set = [System.Collections.Generic.HashSet[string]]::new(
                 [System.StringComparer]::OrdinalIgnoreCase)
 
-    # Export table lines:  "  ordinal  hint  XXXXXXXX  name"
-    # The RVA column is always exactly 8 hex digits.
     & $Dumpbin /exports C:\Windows\System32\ntdll.dll 2>$null | ForEach-Object {
+        # "  ordinal  hint  XXXXXXXX  name"  — RVA is exactly 8 hex digits
         if ($_ -match '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]{8}\s+(\S+)\s*$') {
             $null = $set.Add($Matches[1])
         }
@@ -83,34 +116,14 @@ function Get-NtdllExports([string]$Dumpbin) {
 }
 
 # ---------------------------------------------------------------------------
-# Strip x86 calling-convention decoration so a symbol can be matched against
-# ntdll's undecorated export names.
-#
-# On x86 the compiler prepends '_' to every extern "C" name, so:
-#   _Name@N  (stdcall)  ->  Name
-#   _Name    (cdecl)    ->  Name
-#   __snprintf (cdecl, public name starts with '_') -> _snprintf
-#
-# On x64 no decoration is applied; the symbol name IS the public name and
-# must not be modified (e.g. '_snprintf' stays '_snprintf').
+# Strip x86 calling-convention decoration for display purposes
 # ---------------------------------------------------------------------------
 function Undecorate([string]$sym, [bool]$IsX86) {
-    if (-not $IsX86) { return $sym }                          # x64: identity
-    if ($sym -match '^_(.+)@\d+$') { return $Matches[1] }   # x86 __stdcall
-    if ($sym -match '^_(.+)$')     { return $Matches[1] }   # x86 __cdecl
+    if (-not $IsX86) { return $sym }
+    if ($sym -match '^_(.+)@\d+$') { return $Matches[1] }
+    if ($sym -match '^_(.+)$')     { return $Matches[1] }
     return $sym
 }
-
-# ---------------------------------------------------------------------------
-# Symbols that are always provided by the linker itself, not by any import
-# lib.  They appear as UNDEF in static libs because static libs have no
-# linker step; they are resolved when an exe/DLL is finally linked.
-# ---------------------------------------------------------------------------
-$LinkerDefinedSymbols = [System.Collections.Generic.HashSet[string]]::new(
-    [string[]]@(
-        '__ImageBase'          # PE image base pseudo-symbol
-    ),
-    [System.StringComparer]::OrdinalIgnoreCase)
 
 # ---------------------------------------------------------------------------
 # DLL check — import table must reference only ntdll.dll
@@ -118,79 +131,105 @@ $LinkerDefinedSymbols = [System.Collections.Generic.HashSet[string]]::new(
 function Test-DllImports([string]$Dumpbin, [string]$Path) {
     $out = & $Dumpbin /imports $Path 2>$null
 
-    # Import section headers appear as "    somedll.dll" — exactly 4 leading
-    # spaces, then the DLL name, then nothing else on the line.
+    # Import section headers: "    somedll.dll"  (4 spaces, name, nothing else)
     $dlls = $out |
         Where-Object { $_ -match '^\s{4}(\S+\.dll)\s*$' } |
         ForEach-Object { [IO.Path]::GetFileName($Matches[1]).ToLower() }
 
     if (-not $dlls) {
-        return @{ Error = 'no DLL imports found in import table — unexpected' }
+        return "no DLL imports found in import table — unexpected"
     }
 
     $foreign = @($dlls | Where-Object { $_ -ne 'ntdll.dll' })
     if ($foreign.Count -gt 0) {
-        return @{ Error = "imports from non-ntdll DLL(s): $($foreign -join ', ')" }
+        return "imports from non-ntdll DLL(s): $($foreign -join ', ')"
     }
     return $null   # pass
 }
 
 # ---------------------------------------------------------------------------
-# Static lib check — every unresolved external must be an ntdll.dll export
+# Static lib check — link the lib against only ntdll and inspect the result.
+#
+# Works for both normal and LTCG/WPO (/GL) objects, giving an independent
+# check that does not rely on the DLL configurations being unchanged.
 # ---------------------------------------------------------------------------
-function Test-LibSymbols(
+function Test-LibByLinking(
     [string]$Dumpbin,
-    [string]$Path,
-    [bool]$IsX86,
-    [System.Collections.Generic.HashSet[string]]$NtdllExports)
+    [string]$LinkX64,
+    [string]$LinkX86,
+    [string]$LibPath,
+    [string]$Arch,
+    [string]$SdkNtdllLib,
+    [string]$NtdllExtraLib)
 {
-    $out = & $Dumpbin /symbols $Path 2>$null
+    $machine = if ($Arch -eq 'x64') { 'X64' } else { 'X86' }
+    $link    = if ($Arch -eq 'x64') { $LinkX64 } else { $LinkX86 }
+    $isX86   = $Arch -ne 'x64'
 
-    # Collect defined and undefined External symbols.
-    # Defined:   "NNN XXXXXXXX SECTn  notype ()  External  | Name"
-    # Undefined: "NNN 00000000 UNDEF  notype ()  External  | Name"
-    $defined = [System.Collections.Generic.HashSet[string]]::new()
-    $undef   = [System.Collections.Generic.HashSet[string]]::new()
+    $tempDir  = Join-Path ([IO.Path]::GetTempPath()) ("mhook-verify-" + [IO.Path]::GetRandomFileName())
+    $tempDll  = Join-Path $tempDir 'check.dll'
+    $tempImp  = Join-Path $tempDir 'check.lib'   # discard; required by link.exe
 
-    foreach ($line in $out) {
-        if ($line -match 'External\s+\|\s+(\S+)') {
-            $sym = $Matches[1]
-            if ($line -match '\bUNDEF\b') { $null = $undef.Add($sym) }
-            else                          { $null = $defined.Add($sym) }
+    $null = New-Item -ItemType Directory -Path $tempDir -Force
+
+    try {
+        # Export the public API so the linker has roots to keep.  Without at
+        # least one export, dead-code elimination removes all code (there are
+        # no other roots in a /NOENTRY DLL) and the import table ends up empty.
+        $linkArgs = @(
+            '/DLL', '/NOENTRY', '/NODEFAULTLIB',
+            '/EXPORT:Mhook_SetHook', '/EXPORT:Mhook_Unhook',
+            "/MACHINE:$machine",
+            "/OUT:$tempDll",
+            "/IMPLIB:$tempImp",
+            $LibPath,
+            $SdkNtdllLib,
+            $NtdllExtraLib
+        )
+
+        $linkOut = & $link @linkArgs 2>&1
+        $linkOk  = $LASTEXITCODE -eq 0
+
+        if (-not $linkOk) {
+            # Surface all diagnostic lines: any compiler/linker error code
+            # ([A-Z]\d{4}), "fatal error" prose, or generic "error:" lines.
+            $errors = @($linkOut |
+                Where-Object { $_ -match '(?i)\b(fatal\s+)?error\b' -or $_ -match '[A-Z]\d{4}' } |
+                Select-Object -Unique |
+                ForEach-Object {
+                    # Undecorate symbol names in the message for readability.
+                    $line = $_ -replace 'unresolved external symbol\s+(\S+)',
+                        { "unresolved external symbol " + (Undecorate $_.Groups[1].Value $isX86) }
+                    "  $($line.Trim())"
+                })
+            return "link.exe failed:`n" + ($errors -join "`n")
         }
+
+        # Link succeeded — verify no non-ntdll DLL crept in.
+        return Test-DllImports $Dumpbin $tempDll
     }
-
-    # Detect LTCG (/GL) objects: they produce no readable symbol table.
-    if ($undef.Count -eq 0 -and $defined.Count -eq 0) {
-        return @{ Ltcg = $true }
+    finally {
+        Remove-Item $tempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
-
-    # Symbols that are referenced but not defined anywhere within the lib.
-    $external = @($undef | Where-Object { -not $defined.Contains($_) } | Sort-Object)
-
-    $foreign = @(
-        foreach ($sym in $external) {
-            $bare = Undecorate $sym $IsX86
-            if ($LinkerDefinedSymbols.Contains($bare)) { continue }
-            if (-not $NtdllExports.Contains($bare)) {
-                "  $sym  ->  '$bare' not in ntdll.dll"
-            }
-        }
-    )
-
-    if ($foreign.Count -gt 0) {
-        return @{ Error = "external symbols not in ntdll.dll:`n" + ($foreign -join "`n") }
-    }
-    return $null   # pass
 }
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-try   { $dumpbin = Find-Dumpbin } catch { Write-Error $_.Exception.Message; exit 1 }
-try   { $ntdllExports = Get-NtdllExports $dumpbin } catch { Write-Error $_.Exception.Message; exit 1 }
+try   { $tools = Find-VsTools } catch { Write-Error $_.Exception.Message; exit 1 }
+$dumpbin = $tools.Dumpbin
+$linkX64 = $tools.LinkX64
+$linkX86 = $tools.LinkX86
+
+foreach ($exe in @($dumpbin, $linkX64, $linkX86)) {
+    if (-not (Test-Path $exe)) { Write-Error "Tool not found: $exe"; exit 1 }
+}
+
+try { $ntdllExports = Get-NtdllExports $dumpbin } catch { Write-Error $_.Exception.Message; exit 1 }
 
 Write-Host "dumpbin : $dumpbin"
+Write-Host "link x64: $linkX64"
+Write-Host "link x86: $linkX86"
 Write-Host "ntdll   : $($ntdllExports.Count) named exports"
 Write-Host ''
 
@@ -205,6 +244,9 @@ $configs = @(
     [pscustomobject]@{ Arch = 'Win32'; Config = 'ReleaseDynamic'; IsLib = $false; IsX86 = $true  }
 )
 
+# Cache SDK ntdll.lib paths per architecture (looked up on first use).
+$sdkLibCache = @{}
+
 $passed = 0; $failed = 0; $skipped = 0
 
 foreach ($cfg in $configs) {
@@ -218,23 +260,33 @@ foreach ($cfg in $configs) {
         continue
     }
 
-    $result = if ($cfg.IsLib) {
-        Test-LibSymbols $dumpbin $file $cfg.IsX86 $ntdllExports
+    if ($cfg.IsLib) {
+        # Locate SDK ntdll.lib (cached per architecture).
+        if (-not $sdkLibCache.ContainsKey($cfg.Arch)) {
+            try   { $sdkLibCache[$cfg.Arch] = Find-SdkNtdllLib $cfg.Arch }
+            catch { Write-Error $_.Exception.Message; exit 1 }
+        }
+        $sdkNtdll     = $sdkLibCache[$cfg.Arch]
+        $ntdllExtraLib = Join-Path $SolutionDir "$($cfg.Arch)\$($cfg.Config)\ntdll_extra.lib"
+
+        if (-not (Test-Path $ntdllExtraLib)) {
+            Write-Host "  SKIP    $label  (ntdll_extra.lib not found: $ntdllExtraLib)"
+            $skipped++
+            continue
+        }
+
+        $err = Test-LibByLinking $dumpbin $linkX64 $linkX86 $file $cfg.Arch $sdkNtdll $ntdllExtraLib
     } else {
-        Test-DllImports $dumpbin $file
+        $err = Test-DllImports $dumpbin $file
     }
 
-    if ($null -eq $result) {
+    if ($err) {
+        Write-Host "  FAIL    $label"
+        $err -split "`n" | ForEach-Object { Write-Host "          $_" }
+        $failed++
+    } else {
         Write-Host "  PASS    $label"
         $passed++
-    } elseif ($result.Ltcg) {
-        Write-Host "  INFO    $label  (LTCG/WPO objects — symbol table not available;"
-        Write-Host "                   ntdll-only constraint is enforced at DLL link time)"
-        $passed++   # covered by ReleaseDynamic DLL check
-    } elseif ($result.Error) {
-        Write-Host "  FAIL    $label"
-        $result.Error -split "`n" | ForEach-Object { Write-Host "          $_" }
-        $failed++
     }
 }
 
@@ -242,9 +294,9 @@ Write-Host ''
 Write-Host "$passed passed, $failed failed, $skipped skipped" -NoNewline
 
 if ($failed -gt 0) {
-    Write-Host '' ; Write-Host 'One or more checks FAILED.' -ForegroundColor Red
+    Write-Host ''; Write-Host 'One or more checks FAILED.' -ForegroundColor Red
     exit 1
 } else {
-    Write-Host '' ; Write-Host 'All checks passed.' -ForegroundColor Green
+    Write-Host ''; Write-Host 'All checks passed.' -ForegroundColor Green
     exit 0
 }

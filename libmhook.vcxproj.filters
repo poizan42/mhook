@@ -15,12 +15,6 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="stdafx.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="targetver.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="libmhook.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -40,6 +34,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="mhook-lib\mhook.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="nt_defs.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
