@@ -15,7 +15,8 @@ PARAM_ExecuteOffset     EQU 32          ; ULONG_PTR (8)
 PARAM_IsDynamic         EQU 40          ; ULONG (4)
 PARAM__pad              EQU 44          ; ULONG (4, alignment)
 PARAM_MhookPath         EQU 48          ; UNICODE_STRING (16)
-PARAM_MhookHandle       EQU 64          ; HANDLE (8)     = 48+16
+PARAM_MhookHandle           EQU 64          ; HANDLE (8)     = 48+16
+PARAM_LdrCompanionStatus    EQU 72          ; NTSTATUS (4) diagnostic — sizeof(ShellcodeParams) without this = 72
 
         PUBLIC ShellcodeEnd
 
@@ -35,6 +36,8 @@ ShellcodeEntry PROC
         lea     r8,  [rbx + PARAM_CompanionPath]
         lea     r9,  [rbx + PARAM_CompanionHandle]
         call    qword ptr [rbx + PARAM_LdrLoadDll]
+        ; Save NTSTATUS from LdrLoadDll for companion DLL (diagnostic)
+        mov     dword ptr [rbx + PARAM_LdrCompanionStatus], eax
 
         ; --- Optionally load mhook.dll (dynamic builds) ---
         mov     eax, dword ptr [rbx + PARAM_IsDynamic]

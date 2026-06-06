@@ -38,14 +38,15 @@ typedef void     (__cdecl *ExecuteFn)(HANDLE);
 
 #pragma pack(push, 1)
 struct ShellcodeParams {
-    LdrLoadDllFn    LdrLoadDll;     // fn pointer  8 / 4
-    UNICODE_STRING  CompanionPath;  // 16 / 8
-    HANDLE          CompanionHandle;// 8 / 4
-    ULONG_PTR       ExecuteOffset;  // 8 / 4
-    ULONG           IsDynamic;      // 4
-    ULONG           _pad;           // 4  (alignment: x64 needs 8-byte align for MhookPath.Buffer)
-    UNICODE_STRING  MhookPath;      // 16 / 8
-    HANDLE          MhookHandle;    // 8 / 4
+    LdrLoadDllFn    LdrLoadDll;           // fn pointer  8 / 4
+    UNICODE_STRING  CompanionPath;        // 16 / 8
+    HANDLE          CompanionHandle;      // 8 / 4
+    ULONG_PTR       ExecuteOffset;        // 8 / 4
+    ULONG           IsDynamic;            // 4
+    ULONG           _pad;                 // 4
+    UNICODE_STRING  MhookPath;            // 16 / 8
+    HANDLE          MhookHandle;          // 8 / 4
+    NTSTATUS        LdrCompanionStatus;   // diagnostic: NTSTATUS from LdrLoadDll for companion
 };
 #pragma pack(pop)
 
@@ -57,8 +58,9 @@ static_assert(offsetof(ShellcodeParams, CompanionHandle) == 24, "layout");
 static_assert(offsetof(ShellcodeParams, ExecuteOffset)   == 32, "layout");
 static_assert(offsetof(ShellcodeParams, IsDynamic)       == 40, "layout");
 static_assert(offsetof(ShellcodeParams, MhookPath)       == 48, "layout");
-static_assert(offsetof(ShellcodeParams, MhookHandle)     == 64, "layout");
-static_assert(sizeof(ShellcodeParams)                    == 72, "layout");
+static_assert(offsetof(ShellcodeParams, MhookHandle)          == 64, "layout");
+static_assert(offsetof(ShellcodeParams, LdrCompanionStatus)   == 72, "layout");
+static_assert(sizeof(ShellcodeParams)                         == 76, "layout");
 #else
 static_assert(offsetof(ShellcodeParams, LdrLoadDll)      ==  0, "layout");
 static_assert(offsetof(ShellcodeParams, CompanionPath)   ==  4, "layout");
@@ -67,7 +69,8 @@ static_assert(offsetof(ShellcodeParams, ExecuteOffset)   == 16, "layout");
 static_assert(offsetof(ShellcodeParams, IsDynamic)       == 20, "layout");
 static_assert(offsetof(ShellcodeParams, MhookPath)       == 28, "layout");
 static_assert(offsetof(ShellcodeParams, MhookHandle)     == 36, "layout");
-static_assert(sizeof(ShellcodeParams)                    == 40, "layout");
+static_assert(offsetof(ShellcodeParams, LdrCompanionStatus) == 40, "layout");
+static_assert(sizeof(ShellcodeParams)                    == 44, "layout");
 #endif
 
 // ---------------------------------------------------------------------------
@@ -249,7 +252,12 @@ TEST(MhookTest, UninitializedProcess_HookFiresBeforeInit)
     SIZE_T paramsSize     = sizeof(ShellcodeParams);
     SIZE_T companionBytes = (companionPath.size() + 1) * sizeof(WCHAR);
     SIZE_T mhookBytes     = isDynamic ? (mhookPath.size() + 1) * sizeof(WCHAR) : 0;
-    SIZE_T totalSize      = codeSize + paramsSize + companionBytes + mhookBytes;
+
+    // Path strings are WCHAR arrays: the start address must be 2-byte aligned.
+    // Round the offset up to the next 8-byte boundary (pointer-aligned) so the
+    // alignment holds regardless of future changes to codeSize or paramsSize.
+    SIZE_T strOffset  = (codeSize + paramsSize + 7) & ~(SIZE_T)7;
+    SIZE_T totalSize  = strOffset + companionBytes + mhookBytes;
 
     LPVOID remoteBase = VirtualAllocEx(pi.hProcess, NULL, totalSize,
                                        MEM_COMMIT | MEM_RESERVE,
@@ -259,7 +267,7 @@ TEST(MhookTest, UninitializedProcess_HookFiresBeforeInit)
 
     BYTE*  remoteCode         = (BYTE*)remoteBase;
     BYTE*  remoteParamsBytes  = remoteCode + codeSize;
-    PWSTR  remoteCompanionBuf = (PWSTR)(remoteParamsBytes + paramsSize);
+    PWSTR  remoteCompanionBuf = (PWSTR)(remoteCode + strOffset);
     PWSTR  remoteMhookBuf     = isDynamic
                                     ? (PWSTR)((BYTE*)remoteCompanionBuf + companionBytes)
                                     : NULL;
@@ -298,7 +306,23 @@ TEST(MhookTest, UninitializedProcess_HookFiresBeforeInit)
         remoteParamsBytes, 0, NULL);
     ASSERT_NE(hRemoteThread, (HANDLE)NULL)
         << "CreateRemoteThread failed: " << GetLastError();
+
+    // Wait for the remote thread to finish before reading back diagnostic fields.
+    WaitForSingleObject(hRemoteThread, 3000);
     CloseHandle(hRemoteThread);
+
+    // Read CompanionHandle to determine whether LdrLoadDll succeeded.
+    HANDLE remoteCompanionHandle = (HANDLE)(ULONG_PTR)0xDEAD;
+    NTSTATUS ldrStatus = 0xDEADDEAD;
+    SIZE_T bytesRead = 0;
+    ReadProcessMemory(pi.hProcess,
+                      (LPCVOID)(remoteParamsBytes + offsetof(ShellcodeParams, CompanionHandle)),
+                      &remoteCompanionHandle, sizeof(remoteCompanionHandle), &bytesRead);
+#ifdef _M_X64
+    ReadProcessMemory(pi.hProcess,
+                      (LPCVOID)(remoteParamsBytes + offsetof(ShellcodeParams, LdrCompanionStatus)),
+                      &ldrStatus, sizeof(ldrStatus), &bytesRead);
+#endif
 
     // Close write end of pipe in our process so ReadFile returns at EOF.
     CloseHandle(hWritePipe);
@@ -341,7 +365,8 @@ TEST(MhookTest, UninitializedProcess_HookFiresBeforeInit)
     EXPECT_TRUE(markerFound)
         << "Hook did not fire."
         << " Process exit code: 0x" << std::hex << processExitCode
-        << "  (0=LdrLoadDll failed)"
+        << "  CompanionHandle=" << remoteCompanionHandle
+        << "  LdrStatus=0x" << ldrStatus
         << "  remoteLdrLoadDll=" << (void*)remoteLdrLoadDll
         << "  Output: [" << output << "]";
 }
