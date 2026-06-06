@@ -9,8 +9,12 @@ Win32 subsystem, no CRT.  This means hooks can be installed before the process
 is fully initialised, including from a thread injected into a still-suspended
 process.
 
-Original library by Marton Anka (2007–2014); disassembly engine by Matt
-Conover.  See [COPYING](COPYING) for the MIT licence.
+This is a modified version of the [original mhook library](https://github.com/martona/mhook)
+by Marton Anka (2007–2014); disassembly engine by Matt Conover.  The library
+has been rewritten to depend only on `ntdll.dll` — removing all kernel32, Win32,
+and CRT dependencies — so that it can be used during early process
+initialisation before those subsystems are available.  See [COPYING](COPYING)
+for the MIT licence.
 
 ---
 
