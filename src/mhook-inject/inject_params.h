@@ -19,6 +19,9 @@ typedef NTSTATUS (NTAPI *LdrLoadDllFn)(
     PUNICODE_STRING DllName,
     PVOID          *DllHandle);
 
+// Flags propagated into the remote params; mirrors MHOOK_INJECT_FLAG_* values.
+#define MHOOK_REMOTE_FLAG_DELAY_UNTIL_INIT  0x00000001u
+
 // ---------------------------------------------------------------------------
 // MhookInjectRemoteParams
 //
@@ -33,7 +36,7 @@ typedef NTSTATUS (NTAPI *LdrLoadDllFn)(
 //     CompanionHandle         @ 24  (8)           @ 12  (4)
 //     ExecuteOffset           @ 32  (8)           @ 16  (4)
 //     IsDynamic               @ 40  (4)           @ 20  (4)
-//     _pad                    @ 44  (4)           @ 24  (4)
+//     RemoteFlags             @ 44  (4)           @ 24  (4)   MHOOK_REMOTE_FLAG_*
 //     MhookPath               @ 48  (16)          @ 28  (8)
 //     MhookHandle             @ 64  (8)           @ 36  (4)
 //     TargetDllPath           @ 72  (16)          @ 40  (8)
@@ -54,7 +57,7 @@ typedef struct _MHOOK_INJECT_REMOTE_PARAMS {
     HANDLE          CompanionHandle;      // output      8 / 4
     ULONG_PTR       ExecuteOffset;        // RVA         8 / 4
     ULONG           IsDynamic;            // flag        4
-    ULONG           _pad;                 //             4
+    ULONG           RemoteFlags;          // MHOOK_REMOTE_FLAG_*  4
     UNICODE_STRING  MhookPath;            // mhook.dll  16 / 8
     HANDLE          MhookHandle;          // output      8 / 4
     UNICODE_STRING  TargetDllPath;        // user DLL   16 / 8 (empty for static)
@@ -81,6 +84,7 @@ INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CompanionPath)      ==
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CompanionHandle)    ==  24, "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ExecuteOffset)      ==  32, "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, IsDynamic)          ==  40, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, RemoteFlags)        ==  44, "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, MhookPath)          ==  48, "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, MhookHandle)        ==  64, "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, TargetDllPath)      ==  72, "layout");
@@ -96,6 +100,7 @@ INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CompanionPath)      ==
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CompanionHandle)    == 12,  "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ExecuteOffset)      == 16,  "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, IsDynamic)          == 20,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, RemoteFlags)        == 24,  "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, MhookPath)          == 28,  "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, MhookHandle)        == 36,  "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, TargetDllPath)      == 40,  "layout");

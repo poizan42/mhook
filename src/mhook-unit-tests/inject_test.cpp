@@ -130,3 +130,102 @@ TEST(MhookInjectTest, ExecutesInUninitializedProcess)
         << " hr=0x" << std::hex << hr
         << " Output: [" << output << "]";
 }
+
+// ---------------------------------------------------------------------------
+// Helper shared by both delayed tests
+// ---------------------------------------------------------------------------
+
+static bool RunDelayedInjectTest(const wchar_t *dllPath,
+                                  const char    *functionName,
+                                  const char    *expectedMarker)
+{
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+    HANDLE hReadPipe, hWritePipe;
+    if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0)) return false;
+
+    HANDLE hNullIn = CreateFileW(L"nul", GENERIC_READ,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                 &sa, OPEN_EXISTING, 0, NULL);
+
+    wchar_t cmdLine[] = L"cmd.exe";
+    STARTUPINFOW si   = { sizeof(si) };
+    si.dwFlags        = STARTF_USESTDHANDLES;
+    si.hStdInput      = hNullIn;
+    si.hStdOutput     = hWritePipe;
+    si.hStdError      = hWritePipe;
+
+    PROCESS_INFORMATION pi = {};
+    BOOL created = CreateProcessW(NULL, cmdLine, NULL, NULL, TRUE,
+                                  CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                                  NULL, NULL, &si, &pi);
+    CloseHandle(hNullIn);
+    if (!created) {
+        CloseHandle(hReadPipe);
+        CloseHandle(hWritePipe);
+        return false;  // caller will GTEST_SKIP
+    }
+
+    MHOOK_INJECT_PARAMS params = {};
+    params.Size          = sizeof(params);
+    params.TargetProcess = pi.hProcess;
+    params.DllPath       = dllPath;
+    params.FunctionName  = functionName;
+    params.Flags         = MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT;
+
+    HRESULT hr = Mhook_Inject(&params);
+
+    CloseHandle(hWritePipe);
+
+    std::string output;
+    struct ReadState { HANDLE pipe; std::string *out; };
+    ReadState rs = { hReadPipe, &output };
+    struct ReadThread {
+        static DWORD WINAPI Run(LPVOID p) {
+            ReadState *rs = static_cast<ReadState *>(p);
+            char tmp[1024]; DWORD got;
+            while (ReadFile(rs->pipe, tmp, sizeof(tmp), &got, NULL) && got > 0)
+                rs->out->append(tmp, got);
+            return 0;
+        }
+    };
+    HANDLE hRT = CreateThread(NULL, 0, ReadThread::Run, &rs, 0, NULL);
+    if (hRT) { WaitForSingleObject(hRT, 15000); CloseHandle(hRT); }
+
+    WaitForSingleObject(pi.hProcess, 5000);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    CloseHandle(hReadPipe);
+
+    EXPECT_HRESULT_SUCCEEDED(hr)
+        << "Mhook_Inject (delayed) failed: 0x" << std::hex << hr;
+    EXPECT_TRUE(output.find(expectedMarker) != std::string::npos)
+        << "Expected marker '" << expectedMarker << "' not found."
+        << " Output: [" << output << "]";
+
+    return created;
+}
+
+TEST(MhookInjectTest, DelayedExecutionWithWin32)
+{
+    // Static builds: companion is mhook_inject_test_companion.dll; the existing
+    // ntdll-only Inject_WriteMarkerAndResume function tests the delay mechanism.
+    //
+    // Dynamic builds: companion is mhook_inject.dll; the target is
+    // mhook_inject_win32_test_companion.dll — a regular Win32 DLL that imports
+    // kernel32.dll and uses GetStdHandle/WriteFile.  This proves the delayed
+    // path can load a standard Win32 DLL.
+#ifdef MHOOK_STATIC
+    constexpr const wchar_t *kDll    = L"mhook_inject_test_companion.dll";
+    constexpr const char    *kFn     = "Inject_WriteMarkerAndResume";
+    constexpr const char    *kMarker = "MHOOK_INJECT_OK";
+#else
+    constexpr const wchar_t *kDll    = L"mhook_inject_win32_test_companion.dll";
+    constexpr const char    *kFn     = "Inject_Win32MarkerAndResume";
+    constexpr const char    *kMarker = "MHOOK_INJECT_WIN32_OK";
+#endif
+
+    if (!RunDelayedInjectTest(kDll, kFn, kMarker)) {
+        GTEST_SKIP() << "Could not create cmd.exe";
+    }
+}

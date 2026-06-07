@@ -327,6 +327,13 @@
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
       <CopyOutputDll>true</CopyOutputDll>
     </ProjectReference>
+    <!-- Win32 companion for the delayed-injection test: a standard Win32 DLL
+         loaded at hook-fire time (after process init) by mhook_inject.dll. -->
+    <ProjectReference Include="..\mhook_inject_win32_test_companion\mhook_inject_win32_test_companion.vcxproj">
+      <Project>{E7F3A1B0-9C4D-4E8F-A625-3B0C2D5E7F91}</Project>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+      <CopyOutputDll>true</CopyOutputDll>
+    </ProjectReference>
   </ItemGroup>
   <!-- Source files: gtest-all.cc compiles the entire googletest library as a single TU -->
   <ItemGroup>

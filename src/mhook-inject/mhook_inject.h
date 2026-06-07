@@ -14,12 +14,27 @@ extern "C" {
 #endif
 
 // ---------------------------------------------------------------------------
+// Flags for MHOOK_INJECT_PARAMS.Flags
+// ---------------------------------------------------------------------------
+
+// Defer calling the injection function until the process has completed loader
+// initialisation (PEB_LDR_DATA.Initialized == TRUE, i.e. Win32 APIs are safe).
+// The injection function is guaranteed to run before the process entry point
+// executes any code.  If the process is already initialised when Mhook_Inject
+// injects the thread, the function is called immediately.
+// For dynamic builds the target DLL is not loaded until that moment either.
+#define MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT  0x00000001u
+
+// ---------------------------------------------------------------------------
 // MHOOK_INJECT_PARAMS — input to Mhook_Inject (calling process)
 // ---------------------------------------------------------------------------
 
 typedef struct _MHOOK_INJECT_PARAMS {
     // sizeof(MHOOK_INJECT_PARAMS) — version guard; must be set by the caller.
     ULONG  Size;
+
+    // Combination of MHOOK_INJECT_FLAG_* values; 0 = default behaviour.
+    ULONG  Flags;
 
     // Handle to the target process.  Must have at minimum:
     //   PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_CREATE_THREAD

@@ -10,7 +10,7 @@ PARAM_CompanionPath         EQU 8           ; UNICODE_STRING (16)
 PARAM_CompanionHandle       EQU 24          ; HANDLE (8)
 PARAM_ExecuteOffset         EQU 32          ; ULONG_PTR (8)
 PARAM_IsDynamic             EQU 40          ; ULONG (4)
-PARAM__pad                  EQU 44          ; ULONG (4)
+PARAM_RemoteFlags           EQU 44          ; ULONG (4) MHOOK_REMOTE_FLAG_*
 PARAM_MhookPath             EQU 48          ; UNICODE_STRING (16)
 PARAM_MhookHandle           EQU 64          ; HANDLE (8)
 PARAM_TargetDllPath         EQU 72          ; UNICODE_STRING (16)

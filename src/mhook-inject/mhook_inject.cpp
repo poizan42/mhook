@@ -608,6 +608,8 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     rp.LdrLoadDll     = remoteLdrLoadDll;
     rp.ExecuteOffset  = executeRva;
     rp.IsDynamic      = isDynamic ? 1u : 0u;
+    rp.RemoteFlags    = (params->Flags & MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT)
+                        ? MHOOK_REMOTE_FLAG_DELAY_UNTIL_INIT : 0u;
     rp.FunctionRva    = functionRva;
     rp.UserData       = rUserData;
     rp.UserDataSize   = userDataBytes;

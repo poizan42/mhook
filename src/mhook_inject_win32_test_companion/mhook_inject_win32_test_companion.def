@@ -1,0 +1,3 @@
+LIBRARY mhook_inject_win32_test_companion.dll
+EXPORTS
+    Inject_Win32MarkerAndResume
