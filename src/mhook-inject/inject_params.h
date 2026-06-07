@@ -68,38 +68,42 @@ typedef struct _MHOOK_INJECT_REMOTE_PARAMS {
 } MHOOK_INJECT_REMOTE_PARAMS;
 #pragma pack(pop)
 
-// Layout assertions are guarded for C++ only; inject_entry.c is plain C and
-// does not need them (the offsets are verified by the C++ compilation unit).
+// Portable static assertion: C11 uses _Static_assert, C++ uses static_assert.
+// inject_entry.c is compiled with /std:c11 (set in mhook_inject.vcxproj).
 #ifdef __cplusplus
-#  ifdef _M_X64
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CompanionPath)      ==   8, "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CompanionHandle)    ==  24, "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ExecuteOffset)      ==  32, "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, IsDynamic)          ==  40, "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, MhookPath)          ==  48, "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, MhookHandle)        ==  64, "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, TargetDllPath)      ==  72, "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, FunctionName)       ==  88, "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, FunctionRva)        == 104, "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, UserData)           == 112, "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, UserDataSize)       == 120, "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, InjectStatus)       == 128, "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, LdrCompanionStatus) == 132, "layout");
-static_assert(sizeof(MHOOK_INJECT_REMOTE_PARAMS)                       == 136, "layout");
-#  else
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CompanionPath)      ==  4,  "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CompanionHandle)    == 12,  "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ExecuteOffset)      == 16,  "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, IsDynamic)          == 20,  "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, MhookPath)          == 28,  "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, MhookHandle)        == 36,  "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, TargetDllPath)      == 40,  "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, FunctionName)       == 48,  "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, FunctionRva)        == 56,  "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, UserData)           == 64,  "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, UserDataSize)       == 68,  "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, InjectStatus)       == 72,  "layout");
-static_assert(offsetof(MHOOK_INJECT_REMOTE_PARAMS, LdrCompanionStatus) == 76,  "layout");
-static_assert(sizeof(MHOOK_INJECT_REMOTE_PARAMS)                       == 80,  "layout");
-#  endif
+#  define INJECT_STATIC_ASSERT(e,m) static_assert(e,m)
+#else
+#  define INJECT_STATIC_ASSERT(e,m) _Static_assert(e,m)
+#endif
+
+#ifdef _M_X64
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CompanionPath)      ==   8, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CompanionHandle)    ==  24, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ExecuteOffset)      ==  32, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, IsDynamic)          ==  40, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, MhookPath)          ==  48, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, MhookHandle)        ==  64, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, TargetDllPath)      ==  72, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, FunctionName)       ==  88, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, FunctionRva)        == 104, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, UserData)           == 112, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, UserDataSize)       == 120, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, InjectStatus)       == 128, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, LdrCompanionStatus) == 132, "layout");
+INJECT_STATIC_ASSERT(sizeof(MHOOK_INJECT_REMOTE_PARAMS)                       == 136, "layout");
+#else
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CompanionPath)      ==  4,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CompanionHandle)    == 12,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ExecuteOffset)      == 16,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, IsDynamic)          == 20,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, MhookPath)          == 28,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, MhookHandle)        == 36,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, TargetDllPath)      == 40,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, FunctionName)       == 48,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, FunctionRva)        == 56,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, UserData)           == 64,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, UserDataSize)       == 68,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, InjectStatus)       == 72,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, LdrCompanionStatus) == 76,  "layout");
+INJECT_STATIC_ASSERT(sizeof(MHOOK_INJECT_REMOTE_PARAMS)                       == 80,  "layout");
 #endif

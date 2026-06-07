@@ -174,6 +174,13 @@
 
   <!-- ===== Compiler / Linker settings ===== -->
 
+  <!-- C11 required for _Static_assert in inject_params.h (inject_entry.c) -->
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
   <!-- Debug|Win32 -->
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
