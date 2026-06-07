@@ -15,6 +15,23 @@
 #endif
 
 // ---------------------------------------------------------------------------
+// IsProcessInitialized — check whether loader initialisation is complete
+// ---------------------------------------------------------------------------
+//
+// PEB_LDR_DATA.Initialized is set to TRUE by the Windows loader after all
+// import DLLs have run DLL_PROCESS_ATTACH, immediately before the process
+// entry point is called.  Once this returns TRUE, Win32 APIs are safe to use.
+// It is safe to call from any thread, including one injected before the main
+// thread has started.
+
+static BOOLEAN IsProcessInitialized(void)
+{
+    NT_PEB *peb = RtlCurrentPeb();
+    if (!peb || !peb->Ldr) return FALSE;
+    return ((PEB_LDR_DATA_MIN *)peb->Ldr)->Initialized;
+}
+
+// ---------------------------------------------------------------------------
 // ResumeOtherThreads — resume every thread in this process except the caller
 // ---------------------------------------------------------------------------
 
