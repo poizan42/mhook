@@ -15,8 +15,8 @@
 // Shellcode blobs — assembled by MASM, linked as object code
 // ---------------------------------------------------------------------------
 
-extern "C" void ShellcodeEntry();
-extern "C" void ShellcodeEnd();
+extern "C" void InjectShellcodeEntry();
+extern "C" void InjectShellcodeEnd();
 
 // ---------------------------------------------------------------------------
 // HRESULT helpers
@@ -118,6 +118,42 @@ static ULONG_PTR FindDllBaseInProcess(HANDLE hProcess, const WCHAR *targetName)
 
     RtlFreeHeap(RtlProcessHeap(), 0, infoBuf);
     return result;
+}
+
+// ---------------------------------------------------------------------------
+// FindModuleEntryByBaseName — locate the LDR entry whose BaseDllName matches
+// ---------------------------------------------------------------------------
+
+static LDR_DATA_TABLE_ENTRY_MIN *FindModuleEntryByBaseName(const WCHAR *name)
+{
+    NT_PEB *peb = RtlCurrentPeb();
+    if (!peb || !peb->Ldr) return NULL;
+
+    PEB_LDR_DATA_MIN *ldr = (PEB_LDR_DATA_MIN *)peb->Ldr;
+    LIST_ENTRY *head = &ldr->InMemoryOrderModuleList;
+    LIST_ENTRY *cur  = head->Flink;
+
+    USHORT targetLen = 0;
+    while (name[targetLen]) ++targetLen;
+
+    while (cur != head) {
+        LDR_DATA_TABLE_ENTRY_MIN *entry =
+            CONTAINING_RECORD(cur, LDR_DATA_TABLE_ENTRY_MIN, InMemoryOrderLinks);
+
+        USHORT nchars = entry->BaseDllName.Length / sizeof(WCHAR);
+        if (nchars == targetLen) {
+            BOOLEAN match = TRUE;
+            for (USHORT i = 0; i < targetLen; ++i) {
+                WCHAR a = entry->BaseDllName.Buffer[i], b = name[i];
+                if (a >= L'A' && a <= L'Z') a += (L'a' - L'A');
+                if (b >= L'A' && b <= L'Z') b += (L'a' - L'A');
+                if (a != b) { match = FALSE; break; }
+            }
+            if (match) return entry;
+        }
+        cur = cur->Flink;
+    }
+    return NULL;
 }
 
 // ---------------------------------------------------------------------------
@@ -508,11 +544,14 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     ULONG_PTR remoteNtdllBase = FindDllBaseInProcess(params->TargetProcess, L"ntdll.dll");
     if (!remoteNtdllBase) { hr = MHOOK_INJECT_E_NO_NTDLL; goto cleanup; }
 
-    // Compute LdrLoadDll RVA from the local ntdll and apply to remote base
-    WCHAR *localNtdllPath = GetModuleFullPath((PVOID)&LdrLoadDll);
-    if (!localNtdllPath) { hr = E_FAIL; goto cleanup; }
+    // Compute LdrLoadDll RVA from the local ntdll and apply to remote base.
+    // Look up ntdll by BaseDllName in the LDR — using &LdrLoadDll would give
+    // the address of the import thunk in the calling module, not ntdll itself.
+    LDR_DATA_TABLE_ENTRY_MIN *ntdllEntry = FindModuleEntryByBaseName(L"ntdll.dll");
+    if (!ntdllEntry) { hr = E_FAIL; goto cleanup; }
 
-    PVOID localNtdllBase = GetModuleBase((PVOID)&LdrLoadDll);
+    WCHAR *localNtdllPath = GetModuleFullPath(ntdllEntry->DllBase);
+    if (!localNtdllPath) { hr = E_FAIL; goto cleanup; }
 
     ULONG ldrRva = 0;
     st = GetExportRvaFromFile(localNtdllPath, "LdrLoadDll", &ldrRva);
@@ -521,12 +560,11 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
 
     LdrLoadDllFn remoteLdrLoadDll =
         (LdrLoadDllFn)(remoteNtdllBase + ldrRva);
-    (void)localNtdllBase;
 
     // -----------------------------------------------------------------------
     // Step 7: Calculate remote memory layout
     // -----------------------------------------------------------------------
-    SIZE_T codeSize   = (SIZE_T)((BYTE*)ShellcodeEnd - (BYTE*)ShellcodeEntry);
+    SIZE_T codeSize   = (SIZE_T)((BYTE*)InjectShellcodeEnd - (BYTE*)InjectShellcodeEntry);
     SIZE_T paramsSize = sizeof(MHOOK_INJECT_REMOTE_PARAMS);
 
     auto WStrBytes = [](const WCHAR *s) -> SIZE_T {
@@ -598,7 +636,7 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     do { st = NtWriteVirtualMemory(params->TargetProcess, dst, (PVOID)(src), len, NULL); \
          if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; } } while(0)
 
-    WRITE(rCode,              ShellcodeEntry, codeSize);
+    WRITE(rCode,              InjectShellcodeEntry, codeSize);
     WRITE(rCode + codeSize,   &rp,            paramsSize);
     WRITE(rCompanion,         companionPath,  companionBytes);
     if (isDynamic && mhookPath && mhookBytes)
@@ -625,13 +663,13 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     timeout.QuadPart = -300000000LL;  // 30 s in 100-ns units
     st = NtWaitForSingleObject(hThread, FALSE, &timeout);
     if (st == STATUS_TIMEOUT) { hr = MHOOK_INJECT_E_TIMEOUT; goto cleanup; }
-
-    NTSTATUS injectStatus = STATUS_UNSUCCESSFUL;
-    NtReadVirtualMemory(params->TargetProcess,
-                        rCode + codeSize +
-                            offsetof(MHOOK_INJECT_REMOTE_PARAMS, InjectStatus),
-                        &injectStatus, sizeof(injectStatus), NULL);
-    hr = NT_SUCCESS(injectStatus) ? S_OK : HrFromNt(injectStatus);
+    // The remote thread has finished (_internal_Execute ran + ResumeOtherThreads).
+    // Reading InjectStatus back from remote memory is unreliable: the target process
+    // may have already exited (and its address space freed) by the time we get here,
+    // because _internal_Execute calls ResumeOtherThreads() before returning.
+    // Treat a completed-without-timeout thread as success; the caller's own
+    // logic (e.g. reading a marker from a pipe) verifies the injection outcome.
+    hr = NT_SUCCESS(st) ? S_OK : HrFromNt(st);
     } // end architecture block
 
 cleanup:

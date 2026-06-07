@@ -1,6 +1,6 @@
 ; inject_shellcode_x64.asm — remote-thread entry point for x64 injection.
 ;
-; Called as:  DWORD WINAPI ShellcodeEntry(LPVOID lpParam)
+; Called as:  DWORD WINAPI InjectShellcodeEntry(LPVOID lpParam)
 ;   RCX = pointer to MHOOK_INJECT_REMOTE_PARAMS (see inject_params.h)
 ;
 ; MHOOK_INJECT_REMOTE_PARAMS field offsets (x64) — must match inject_params.h.
@@ -22,12 +22,12 @@ PARAM_UserDataSize          EQU 120         ; SIZE_T (8)
 PARAM_InjectStatus          EQU 128         ; NTSTATUS (4)
 PARAM_LdrCompanionStatus    EQU 132         ; NTSTATUS (4)
 
-        PUBLIC ShellcodeEnd
+        PUBLIC InjectShellcodeEnd
 
 .code
 
 ; ---------------------------------------------------------------------------
-ShellcodeEntry PROC
+InjectShellcodeEntry PROC
         push    rbx
         sub     rsp, 28h            ; shadow space + stack alignment
 
@@ -66,10 +66,10 @@ CallExecute:
         pop     rbx
         ret
 
-; Sentinel: immediately follows ShellcodeEntry so that
-; (ShellcodeEnd - ShellcodeEntry) gives the code size.
-ShellcodeEnd::
+; Sentinel: immediately follows InjectShellcodeEntry so that
+; (InjectShellcodeEnd - InjectShellcodeEntry) gives the code size.
+InjectShellcodeEnd::
         nop
-ShellcodeEntry ENDP
+InjectShellcodeEntry ENDP
 
 END

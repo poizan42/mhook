@@ -1,6 +1,6 @@
 ; inject_shellcode_x86.asm — remote-thread entry point for x86 injection.
 ;
-; Called as:  DWORD WINAPI ShellcodeEntry(LPVOID lpParam)  (__stdcall)
+; Called as:  DWORD WINAPI InjectShellcodeEntry(LPVOID lpParam)  (__stdcall)
 ;   [EBP+8] = pointer to MHOOK_INJECT_REMOTE_PARAMS (see inject_params.h)
 ;
 ; MHOOK_INJECT_REMOTE_PARAMS field offsets (x86) — must match inject_params.h.
@@ -22,7 +22,7 @@ PARAM_UserDataSize          EQU 68          ; SIZE_T (4)
 PARAM_InjectStatus          EQU 72          ; NTSTATUS (4)
 PARAM_LdrCompanionStatus    EQU 76          ; NTSTATUS (4)
 
-        PUBLIC ShellcodeEnd
+        PUBLIC InjectShellcodeEnd
 
 .686
 .model flat, C      ; 'C' language: MASM adds '_' prefix to all PROC names
@@ -30,7 +30,7 @@ PARAM_LdrCompanionStatus    EQU 76          ; NTSTATUS (4)
 .code
 
 ; ---------------------------------------------------------------------------
-ShellcodeEntry PROC
+InjectShellcodeEntry PROC
         push    ebp
         mov     ebp, esp
         push    ebx
@@ -76,10 +76,10 @@ CallExecute:
         pop     ebp
         ret     4                       ; __stdcall: clean lpParam (4 bytes)
 
-; Sentinel: immediately follows ShellcodeEntry so that
-; (ShellcodeEnd - ShellcodeEntry) gives the code size.
-ShellcodeEnd::
+; Sentinel: immediately follows InjectShellcodeEntry so that
+; (InjectShellcodeEnd - InjectShellcodeEntry) gives the code size.
+InjectShellcodeEnd::
         nop
-ShellcodeEntry ENDP
+InjectShellcodeEntry ENDP
 
 END

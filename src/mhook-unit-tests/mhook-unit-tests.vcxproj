@@ -314,6 +314,19 @@
       <LinkLibraryDependencies>false</LinkLibraryDependencies>
       <CopyOutputDll>true</CopyOutputDll>
     </ProjectReference>
+    <!-- mhook_inject: auto-links mhook_inject.lib (static) or import lib (dynamic);
+         copies mhook_inject.dll to test output dir for dynamic configs. -->
+    <ProjectReference Include="..\mhook-inject\mhook_inject.vcxproj">
+      <Project>{A3B7C2D1-5E4F-4A9B-8C3D-2F1E6A0B7C94}</Project>
+      <CopyOutputDll>true</CopyOutputDll>
+    </ProjectReference>
+    <!-- mhook_inject_test_companion: DLL loaded at runtime by Mhook_Inject;
+         not linked directly (LinkLibraryDependencies=false). -->
+    <ProjectReference Include="..\mhook_inject_test_companion\mhook_inject_test_companion.vcxproj">
+      <Project>{C5D2E1F0-8A3B-4C6D-9E7F-1A2B3C4D5E6F}</Project>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+      <CopyOutputDll>true</CopyOutputDll>
+    </ProjectReference>
   </ItemGroup>
   <!-- Source files: gtest-all.cc compiles the entire googletest library as a single TU -->
   <ItemGroup>
@@ -331,6 +344,7 @@
     <!-- Test source -->
     <ClCompile Include="tests.cpp" />
     <ClCompile Include="uninit_test.cpp" />
+    <ClCompile Include="inject_test.cpp" />
   </ItemGroup>
   <!-- MASM shellcode: each file only assembles for its matching platform -->
   <ItemGroup>
