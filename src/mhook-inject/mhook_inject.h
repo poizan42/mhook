@@ -60,22 +60,30 @@ typedef struct _MHOOK_INJECT_PARAMS {
 } MHOOK_INJECT_PARAMS;
 
 // ---------------------------------------------------------------------------
+// Function-pointer types for Mhook_SetHook and Mhook_Unhook.
+// Matches the declarations in mhook-lib/mhook.h.
+// ---------------------------------------------------------------------------
+
+typedef BOOL (__cdecl *MhookSetHookFn)(PVOID *ppSystemFunction, PVOID pHookFunction);
+typedef BOOL (__cdecl *MhookUnhookFn)(PVOID *ppHookedFunction);
+
+// ---------------------------------------------------------------------------
 // MHOOK_INJECT_CONTEXT — delivered to the injected function in the target
 // ---------------------------------------------------------------------------
 
 typedef struct _MHOOK_INJECT_CONTEXT {
     // sizeof(MHOOK_INJECT_CONTEXT) — version guard.
-    ULONG  Size;
+    ULONG          Size;
 
     // Mhook_SetHook / Mhook_Unhook function pointers.
     // Dynamic builds: resolved from mhook.dll loaded in the target process.
     // Static builds:  point to the statically linked implementations.
-    PVOID  SetHook;
-    PVOID  Unhook;
+    MhookSetHookFn SetHook;
+    MhookUnhookFn  Unhook;
 
     // Pointer to the UserData copy inside the target process (NULL if none).
-    PVOID  UserData;
-    SIZE_T UserDataSize;
+    PVOID          UserData;
+    SIZE_T         UserDataSize;
 
 } MHOOK_INJECT_CONTEXT;
 

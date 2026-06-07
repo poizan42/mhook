@@ -73,7 +73,8 @@ void __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
         goto done;
 
     // --- Resolve Mhook_SetHook / Mhook_Unhook ---
-    PVOID pSetHook = NULL, pUnhook = NULL;
+    MhookSetHookFn pSetHook = NULL;
+    MhookUnhookFn  pUnhook  = NULL;
 #ifdef MHOOK_INJECT_DYNAMIC
     if (pParams->MhookHandle) {
         static CHAR szSetHook[]  = "Mhook_SetHook";
@@ -83,17 +84,16 @@ void __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
         as.Buffer        = szSetHook;
         as.Length        = sizeof(szSetHook) - 1;
         as.MaximumLength = sizeof(szSetHook);
-        LdrGetProcedureAddress(pParams->MhookHandle, &as, 0, &pSetHook);
+        LdrGetProcedureAddress(pParams->MhookHandle, &as, 0, (PVOID *)&pSetHook);
 
         as.Buffer        = szUnhook;
         as.Length        = sizeof(szUnhook) - 1;
         as.MaximumLength = sizeof(szUnhook);
-        LdrGetProcedureAddress(pParams->MhookHandle, &as, 0, &pUnhook);
+        LdrGetProcedureAddress(pParams->MhookHandle, &as, 0, (PVOID *)&pUnhook);
     }
 #else
-    (void)pParams; // suppress warning — pParams used above and below
-    pSetHook = (PVOID)Mhook_SetHook;
-    pUnhook  = (PVOID)Mhook_Unhook;
+    pSetHook = Mhook_SetHook;
+    pUnhook  = Mhook_Unhook;
 #endif
 
     // --- Build the context and call the user's injection function ---
