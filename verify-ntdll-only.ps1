@@ -160,7 +160,9 @@ function Test-LibByLinking(
     [string]$LibPath,
     [string]$Arch,
     [string]$SdkNtdllLib,
-    [string]$NtdllExtraLib)
+    [string]$NtdllExtraLib,
+    [string[]]$Exports = @('Mhook_SetHook', 'Mhook_Unhook'),
+    [string[]]$AdditionalLibs = @())
 {
     $machine = if ($Arch -eq 'x64') { 'X64' } else { 'X86' }
     $link    = if ($Arch -eq 'x64') { $LinkX64 } else { $LinkX86 }
@@ -178,14 +180,14 @@ function Test-LibByLinking(
         # no other roots in a /NOENTRY DLL) and the import table ends up empty.
         $linkArgs = @(
             '/DLL', '/NOENTRY', '/NODEFAULTLIB',
-            '/EXPORT:Mhook_SetHook', '/EXPORT:Mhook_Unhook',
+            ($Exports | ForEach-Object { "/EXPORT:$_" }),
             "/MACHINE:$machine",
             "/OUT:$tempDll",
             "/IMPLIB:$tempImp",
             $LibPath,
             $SdkNtdllLib,
             $NtdllExtraLib
-        )
+        ) + $AdditionalLibs
 
         $linkOut = & $link @linkArgs 2>&1
         $linkOk  = $LASTEXITCODE -eq 0
@@ -234,14 +236,26 @@ Write-Host "ntdll   : $($ntdllExports.Count) named exports"
 Write-Host ''
 
 $configs = @(
-    [pscustomobject]@{ Arch = 'x64';   Config = 'Debug';          IsLib = $true;  IsX86 = $false }
-    [pscustomobject]@{ Arch = 'x64';   Config = 'DebugDynamic';   IsLib = $false; IsX86 = $false }
-    [pscustomobject]@{ Arch = 'x64';   Config = 'Release';        IsLib = $true;  IsX86 = $false }
-    [pscustomobject]@{ Arch = 'x64';   Config = 'ReleaseDynamic'; IsLib = $false; IsX86 = $false }
-    [pscustomobject]@{ Arch = 'Win32'; Config = 'Debug';          IsLib = $true;  IsX86 = $true  }
-    [pscustomobject]@{ Arch = 'Win32'; Config = 'DebugDynamic';   IsLib = $false; IsX86 = $true  }
-    [pscustomobject]@{ Arch = 'Win32'; Config = 'Release';        IsLib = $true;  IsX86 = $true  }
-    [pscustomobject]@{ Arch = 'Win32'; Config = 'ReleaseDynamic'; IsLib = $false; IsX86 = $true  }
+    # libmhook — static: exports Mhook_SetHook + Mhook_Unhook; no extra link inputs
+    [pscustomobject]@{ Project='libmhook';    BaseName='mhook';        Arch='x64';   Config='Debug';          IsLib=$true;  IsX86=$false; Exports=@('Mhook_SetHook','Mhook_Unhook'); NeedsMhook=$false }
+    [pscustomobject]@{ Project='libmhook';    BaseName='mhook';        Arch='x64';   Config='DebugDynamic';   IsLib=$false; IsX86=$false; Exports=@();                               NeedsMhook=$false }
+    [pscustomobject]@{ Project='libmhook';    BaseName='mhook';        Arch='x64';   Config='Release';        IsLib=$true;  IsX86=$false; Exports=@('Mhook_SetHook','Mhook_Unhook'); NeedsMhook=$false }
+    [pscustomobject]@{ Project='libmhook';    BaseName='mhook';        Arch='x64';   Config='ReleaseDynamic'; IsLib=$false; IsX86=$false; Exports=@();                               NeedsMhook=$false }
+    [pscustomobject]@{ Project='libmhook';    BaseName='mhook';        Arch='Win32'; Config='Debug';          IsLib=$true;  IsX86=$true;  Exports=@('Mhook_SetHook','Mhook_Unhook'); NeedsMhook=$false }
+    [pscustomobject]@{ Project='libmhook';    BaseName='mhook';        Arch='Win32'; Config='DebugDynamic';   IsLib=$false; IsX86=$true;  Exports=@();                               NeedsMhook=$false }
+    [pscustomobject]@{ Project='libmhook';    BaseName='mhook';        Arch='Win32'; Config='Release';        IsLib=$true;  IsX86=$true;  Exports=@('Mhook_SetHook','Mhook_Unhook'); NeedsMhook=$false }
+    [pscustomobject]@{ Project='libmhook';    BaseName='mhook';        Arch='Win32'; Config='ReleaseDynamic'; IsLib=$false; IsX86=$true;  Exports=@();                               NeedsMhook=$false }
+
+    # mhook_inject — static: exports Mhook_Inject; also links mhook.lib to resolve
+    #                SetHook/Unhook used by inject_entry.c in static builds
+    [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='x64';   Config='Debug';          IsLib=$true;  IsX86=$false; Exports=@('Mhook_Inject'); NeedsMhook=$true  }
+    [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='x64';   Config='DebugDynamic';   IsLib=$false; IsX86=$false; Exports=@();               NeedsMhook=$false }
+    [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='x64';   Config='Release';        IsLib=$true;  IsX86=$false; Exports=@('Mhook_Inject'); NeedsMhook=$true  }
+    [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='x64';   Config='ReleaseDynamic'; IsLib=$false; IsX86=$false; Exports=@();               NeedsMhook=$false }
+    [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='Win32'; Config='Debug';          IsLib=$true;  IsX86=$true;  Exports=@('Mhook_Inject'); NeedsMhook=$true  }
+    [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='Win32'; Config='DebugDynamic';   IsLib=$false; IsX86=$true;  Exports=@();               NeedsMhook=$false }
+    [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='Win32'; Config='Release';        IsLib=$true;  IsX86=$true;  Exports=@('Mhook_Inject'); NeedsMhook=$true  }
+    [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='Win32'; Config='ReleaseDynamic'; IsLib=$false; IsX86=$true;  Exports=@();               NeedsMhook=$false }
 )
 
 # Cache SDK ntdll.lib paths per architecture (looked up on first use).
@@ -251,11 +265,11 @@ $passed = 0; $failed = 0; $skipped = 0
 
 foreach ($cfg in $configs) {
     $ext   = if ($cfg.IsLib) { 'lib' } else { 'dll' }
-    $file  = Join-Path $SolutionDir build artifacts libmhook $cfg.Arch $cfg.Config "mhook.$ext"
-    $label = "$($cfg.Config)|$($cfg.Arch)".PadRight(22)
+    $file  = Join-Path $SolutionDir build artifacts $cfg.Project $cfg.Arch $cfg.Config "$($cfg.BaseName).$ext"
+    $label = "$($cfg.Project) $($cfg.Config)|$($cfg.Arch)".PadRight(38)
 
     if (-not (Test-Path $file)) {
-        Write-Host "  SKIP    $label  (artifact not found: $file)"
+        Write-Host "  SKIP    $label  (artifact not found)"
         $skipped++
         continue
     }
@@ -266,16 +280,29 @@ foreach ($cfg in $configs) {
             try   { $sdkLibCache[$cfg.Arch] = Find-SdkNtdllLib $cfg.Arch }
             catch { Write-Error $_.Exception.Message; exit 1 }
         }
-        $sdkNtdll     = $sdkLibCache[$cfg.Arch]
+        $sdkNtdll      = $sdkLibCache[$cfg.Arch]
         $ntdllExtraLib = Join-Path $SolutionDir build artifacts ntdll_extra_stub "$($cfg.Arch)\$($cfg.Config)\ntdll_extra.lib"
 
         if (-not (Test-Path $ntdllExtraLib)) {
-            Write-Host "  SKIP    $label  (ntdll_extra.lib not found: $ntdllExtraLib)"
+            Write-Host "  SKIP    $label  (ntdll_extra.lib not found)"
             $skipped++
             continue
         }
 
-        $err = Test-LibByLinking $dumpbin $linkX64 $linkX86 $file $cfg.Arch $sdkNtdll $ntdllExtraLib
+        # mhook_inject static builds reference Mhook_SetHook/Unhook from mhook.lib
+        $extraLibs = @()
+        if ($cfg.NeedsMhook) {
+            $mhookLib = Join-Path $SolutionDir build artifacts libmhook "$($cfg.Arch)\$($cfg.Config)\mhook.lib"
+            if (-not (Test-Path $mhookLib)) {
+                Write-Host "  SKIP    $label  (mhook.lib not found)"
+                $skipped++
+                continue
+            }
+            $extraLibs = @($mhookLib)
+        }
+
+        $err = Test-LibByLinking $dumpbin $linkX64 $linkX86 $file $cfg.Arch $sdkNtdll $ntdllExtraLib `
+                                 -Exports $cfg.Exports -AdditionalLibs $extraLibs
     } else {
         $err = Test-DllImports $dumpbin $file
     }
