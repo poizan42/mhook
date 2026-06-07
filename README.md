@@ -4,17 +4,14 @@ A Windows function-hooking library for x86 and x64.  mhook patches target
 functions in-place at runtime, using a disassembler to copy the displaced
 instructions into a trampoline so the original function can still be called.
 
-**Key property:** the library depends only on `ntdll.dll` — no kernel32, no
-Win32 subsystem, no CRT.  This means hooks can be installed before the process
-is fully initialised, including from a thread injected into a still-suspended
-process.
-
-This is a modified version of the [original mhook library](https://github.com/martona/mhook)
-by Marton Anka (2007–2014); disassembly engine by Matt Conover.  The library
-has been rewritten to depend only on `ntdll.dll` — removing all kernel32, Win32,
+The library has been rewritten to depend only on `ntdll.dll` — removing all kernel32, Win32,
 and CRT dependencies — so that it can be used during early process
-initialisation before those subsystems are available.  See [COPYING](COPYING)
-for the MIT licence.
+initialisation before those subsystems are available. 
+
+Forked from [original mhook library](https://github.com/martona/mhook)
+by Marton Anka (2007–2014); disassembly engine by Matt Conover.
+
+See [COPYING](COPYING) for the MIT licence.
 
 ---
 
