@@ -81,8 +81,36 @@ typedef NTSTATUS *PNTSTATUS;
 #define NT_SUCCESS(s)   ((NTSTATUS)(s) >= 0)
 #endif
 
+#ifndef STATUS_SUCCESS
+#define STATUS_SUCCESS              ((NTSTATUS)0x00000000L)
+#endif
 #ifndef STATUS_NOT_IMPLEMENTED
-#define STATUS_NOT_IMPLEMENTED  ((NTSTATUS)0xC0000002L)
+#define STATUS_NOT_IMPLEMENTED      ((NTSTATUS)0xC0000002L)
+#endif
+#ifndef STATUS_NO_MEMORY
+#define STATUS_NO_MEMORY            ((NTSTATUS)0xC0000017L)
+#endif
+#ifndef STATUS_NOT_FOUND
+#define STATUS_NOT_FOUND            ((NTSTATUS)0xC0000225L)
+#endif
+#ifndef STATUS_INVALID_IMAGE_FORMAT
+#define STATUS_INVALID_IMAGE_FORMAT ((NTSTATUS)0xC000007BL)
+#endif
+#ifndef STATUS_UNSUCCESSFUL
+#define STATUS_UNSUCCESSFUL         ((NTSTATUS)0xC0000001L)
+#endif
+#ifndef STATUS_TIMEOUT
+#define STATUS_TIMEOUT              ((NTSTATUS)0x00000102L)
+#endif
+
+// Common HRESULT values (normally from winerror.h)
+#ifndef S_OK
+#define S_OK        ((HRESULT)0x00000000L)
+#define S_FALSE     ((HRESULT)0x00000001L)
+#define E_FAIL      ((HRESULT)0x80004005L)
+#define E_NOTIMPL   ((HRESULT)0x80004001L)
+#define E_INVALIDARG ((HRESULT)0x80070057L)
+#define E_OUTOFMEMORY ((HRESULT)0x8007000EL)
 #endif
 
 // ---------------------------------------------------------------------------
@@ -109,6 +137,23 @@ typedef struct _OBJECT_ATTRIBUTES {
     PVOID           SecurityDescriptor;
     PVOID           SecurityQualityOfService;
 } OBJECT_ATTRIBUTES, *POBJECT_ATTRIBUTES;
+
+// Helper macro — standard phnt pattern for initialising OBJECT_ATTRIBUTES on the stack
+#ifndef InitializeObjectAttributes
+#define InitializeObjectAttributes(p,n,a,r,s) do { \
+    (p)->Length                   = sizeof(OBJECT_ATTRIBUTES); \
+    (p)->RootDirectory            = (r);                        \
+    (p)->Attributes               = (a);                        \
+    (p)->ObjectName               = (n);                        \
+    (p)->SecurityDescriptor       = (s);                        \
+    (p)->SecurityQualityOfService = NULL;                       \
+} while(0)
+#endif
+
+// OBJ_CASE_INSENSITIVE — passed as Attributes to InitializeObjectAttributes
+#ifndef OBJ_CASE_INSENSITIVE
+#define OBJ_CASE_INSENSITIVE 0x00000040UL
+#endif
 #endif
 
 // ---------------------------------------------------------------------------
@@ -155,6 +200,30 @@ typedef CONST char *PCSZ;
 #endif
 
 // ---------------------------------------------------------------------------
+// NtOpenFile / NtCreateFile option flags (winternl.h or ntioapi.h in WDK)
+// ---------------------------------------------------------------------------
+
+#ifndef FILE_SYNCHRONOUS_IO_NONALERT
+#define FILE_SYNCHRONOUS_IO_NONALERT    0x00000020UL
+#endif
+#ifndef FILE_NON_DIRECTORY_FILE
+#define FILE_NON_DIRECTORY_FILE         0x00000040UL
+#endif
+#ifndef FILE_GENERIC_READ
+// winnt.h defines the building-block masks; combine them here.
+#define FILE_GENERIC_READ  (STANDARD_RIGHTS_READ | FILE_READ_DATA | \
+                            FILE_READ_ATTRIBUTES | FILE_READ_EA | SYNCHRONIZE)
+#endif
+
+// ---------------------------------------------------------------------------
+// NtQueryInformationProcess information-class values (processthreadsapi.h / ntpsapi.h)
+// ---------------------------------------------------------------------------
+
+#ifndef ProcessWow64Information
+#define ProcessWow64Information  26UL
+#endif
+
+// ---------------------------------------------------------------------------
 // Process Environment Block — fields up to and including ProcessHeap.
 //
 // Layout (phnt ntpebteb.h):
@@ -178,6 +247,39 @@ typedef struct _NT_PEB {
     PVOID   SubSystemData;
     PVOID   ProcessHeap;
 } NT_PEB, *PNT_PEB;
+
+// ---------------------------------------------------------------------------
+// PEB loader data — minimal layout to walk InMemoryOrderModuleList.
+//
+// When walking PEB.Ldr->InMemoryOrderModuleList each LIST_ENTRY flink/blink
+// points to the InMemoryOrderLinks field of an LDR_DATA_TABLE_ENTRY.  The MIN
+// struct is laid out starting from InMemoryOrderLinks so that
+// CONTAINING_RECORD with InMemoryOrderLinks as the member works correctly.
+//
+// Full offsets from InMemoryOrderLinks (= offset 0 in MIN struct):
+//   x64: Reserved2@16  DllBase@32  EntryPoint@40  SizeOfImage@48
+//        FullDllName@56  BaseDllName@72
+//   x86: Reserved2@8   DllBase@16  EntryPoint@20  SizeOfImage@24
+//        FullDllName@28  BaseDllName@36
+// ---------------------------------------------------------------------------
+
+typedef struct _PEB_LDR_DATA_MIN {
+    ULONG       Length;
+    BOOLEAN     Initialized;
+    PVOID       SsHandle;
+    LIST_ENTRY  InLoadOrderModuleList;
+    LIST_ENTRY  InMemoryOrderModuleList;
+} PEB_LDR_DATA_MIN, *PPEB_LDR_DATA_MIN;
+
+typedef struct _LDR_DATA_TABLE_ENTRY_MIN {
+    LIST_ENTRY      InMemoryOrderLinks;  // offset 0 in this struct
+    PVOID           Reserved2[2];        // InInitializationOrderLinks (LIST_ENTRY)
+    PVOID           DllBase;
+    PVOID           EntryPoint;
+    ULONG           SizeOfImage;
+    UNICODE_STRING  FullDllName;
+    UNICODE_STRING  BaseDllName;
+} LDR_DATA_TABLE_ENTRY_MIN, *PLDR_DATA_TABLE_ENTRY_MIN;
 
 // ---------------------------------------------------------------------------
 // Thread Environment Block — fields up to and including ProcessEnvironmentBlock.
@@ -242,6 +344,7 @@ typedef enum _NT_SYSTEMINFOCLASS {
 
 typedef enum _NT_MEMORYINFOCLASS {
     MemoryBasicInformation          = 0,
+    MemoryMappedFileInformation     = 2,
 } NT_MEMORYINFOCLASS;
 
 // ---------------------------------------------------------------------------
@@ -451,6 +554,71 @@ NTSTATUS NTAPI NtWriteFile(
     ULONG           Length,
     PLARGE_INTEGER  ByteOffset,
     PULONG          Key);
+
+// Virtual memory — remote-process variants
+NTSTATUS NTAPI NtWriteVirtualMemory(
+    HANDLE      ProcessHandle,
+    PVOID       BaseAddress,
+    PVOID       Buffer,
+    SIZE_T      NumberOfBytesToWrite,
+    PSIZE_T     NumberOfBytesWritten);
+
+NTSTATUS NTAPI NtReadVirtualMemory(
+    HANDLE      ProcessHandle,
+    PVOID       BaseAddress,
+    PVOID       Buffer,
+    SIZE_T      NumberOfBytesToRead,
+    PSIZE_T     NumberOfBytesRead);
+
+// Thread creation in a remote (or current) process
+//   CreateFlags: 0 = run immediately, 1 = CREATE_SUSPENDED
+NTSTATUS NTAPI NtCreateThreadEx(
+    PHANDLE             ThreadHandle,
+    ACCESS_MASK         DesiredAccess,
+    POBJECT_ATTRIBUTES  ObjectAttributes,
+    HANDLE              ProcessHandle,
+    PVOID               StartRoutine,
+    PVOID               Argument,
+    ULONG               CreateFlags,
+    SIZE_T              ZeroBits,
+    SIZE_T              StackSize,
+    SIZE_T              MaximumStackSize,
+    PVOID               AttributeList);
+
+// Wait for a single kernel object
+NTSTATUS NTAPI NtWaitForSingleObject(
+    HANDLE          Handle,
+    BOOLEAN         Alertable,
+    PLARGE_INTEGER  Timeout);
+
+// File I/O
+NTSTATUS NTAPI NtOpenFile(
+    PHANDLE             FileHandle,
+    ACCESS_MASK         DesiredAccess,
+    POBJECT_ATTRIBUTES  ObjectAttributes,
+    PIO_STATUS_BLOCK    IoStatusBlock,
+    ULONG               ShareAccess,
+    ULONG               OpenOptions);
+
+NTSTATUS NTAPI NtReadFile(
+    HANDLE              FileHandle,
+    HANDLE              Event,
+    PIO_APC_ROUTINE     ApcRoutine,
+    PVOID               ApcContext,
+    PIO_STATUS_BLOCK    IoStatusBlock,
+    PVOID               Buffer,
+    ULONG               Length,
+    PLARGE_INTEGER      ByteOffset,
+    PULONG              Key);
+
+// Process information
+//   ProcessWow64Information (class 26): returns PVOID; non-NULL means WOW64 (32-bit process)
+NTSTATUS NTAPI NtQueryInformationProcess(
+    HANDLE      ProcessHandle,
+    ULONG       ProcessInformationClass,
+    PVOID       ProcessInformation,
+    ULONG       ProcessInformationLength,
+    PULONG      ReturnLength);
 
 // Loader
 NTSTATUS NTAPI LdrLoadDll(

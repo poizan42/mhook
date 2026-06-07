@@ -10,5 +10,6 @@
   <Project Path="src/libmhook.vcxproj" Id="9af4e83d-3670-44c8-84b9-54ffd4afff21" />
   <Project Path="src/ntdll_extra_stub/ntdll_extra_stub.vcxproj" Id="b1e3f8c2-4a5d-4f9e-8b2c-1d6e7a3f9b04" />
   <Project Path="src/mhook_test_uninitialized_inject/mhook_test_uninitialized_inject.vcxproj" Id="f2a7c3b8-91d4-4e6f-a823-5c9b0d7e2f14" />
+  <Project Path="src/mhook-inject/mhook_inject.vcxproj" Id="a3b7c2d1-5e4f-4a9b-8c3d-2f1e6a0b7c94" />
   <Project Path="src/mhook-unit-tests/mhook-unit-tests.vcxproj" Id="d4a2f8b3-7e1c-4d9a-b5f2-3c8e6a1d0f47" />
 </Solution>
