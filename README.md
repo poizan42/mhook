@@ -116,8 +116,44 @@ typedef struct _MHOOK_INJECT_PARAMS {
     // Optional data block copied verbatim into the target process.
     PVOID  UserData;
     SIZE_T UserDataSize;
+
+    // Combination of MHOOK_INJECT_FLAG_* values (see below); 0 = default.
+    ULONG  Flags;
 } MHOOK_INJECT_PARAMS;
 ```
+
+### Flags
+
+| Flag | Value | Description |
+|---|---|---|
+| `MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT` | `0x1` | Defer the injection function until the process has completed loader initialisation (`PEB_LDR_DATA.Initialized == TRUE`) so that Win32 APIs are safe to call. |
+
+**`MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT`** — when set, `Mhook_Inject` installs a
+hook on the process entry point instead of calling the injection function
+immediately.  The function is called just before the entry point runs (i.e. after
+all DLL `DllMain` handlers have executed but before the process's own startup
+code).  For dynamic builds the target DLL is not loaded until that moment either,
+so the target DLL may freely import from `kernel32.dll` or any other Win32 DLL.
+
+If the process is already initialised when `Mhook_Inject` injects the thread, the
+function is called immediately (fast path, no entry-point hook installed).
+
+```c
+// Defer until Win32 is available, then load a normal Win32 DLL
+MHOOK_INJECT_PARAMS p = { sizeof(p) };
+p.TargetProcess = pi.hProcess;
+p.DllPath       = L"my_hooks.dll";    // may freely use kernel32.dll at runtime
+p.FunctionName  = "InstallHooks";
+p.Flags         = MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT;
+
+HRESULT hr = Mhook_Inject(&p);   // hooks installed before entry point runs
+```
+
+**Static builds and `DELAY_UNTIL_INIT`:** the static companion DLL still has an
+ntdll-only import table (so it can be loaded before Win32 is available), but the
+injection *function itself* can call Win32 APIs at runtime — including
+`LdrLoadDll` to load a Win32-dependent DLL and `LdrGetProcedureAddress` to
+call into it.
 
 ### `MHOOK_INJECT_CONTEXT` (received by the injected function)
 
@@ -188,8 +224,11 @@ a DLL that is loaded into the target process.  That DLL must:
 
    Alternatively pass `/EXPORT:_internal_Execute` to the linker.
 
-The injection DLL may only import from `ntdll.dll` if it needs to run before
-Win32 is initialised (same constraint as `mhook.dll`).
+The injection DLL's **import table** may only reference `ntdll.dll` if it must
+be loaded before Win32 is initialised (i.e. without `MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT`).
+With the delay flag set, the companion DLL is still loaded early (import table
+must be ntdll-only), but the injection *function* runs after Win32 is available
+and can call Win32 APIs or load Win32 DLLs dynamically via `LdrLoadDll`.
 
 ### Dynamic build — what consumers must do
 
