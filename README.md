@@ -63,6 +63,148 @@ Mhook_Unhook((PVOID *)&TrueNtOpenProcess);
 
 ---
 
+## Injecting into remote processes (`mhook_inject`)
+
+`mhook_inject` is a companion library that injects a user-supplied function
+into an arbitrary process — including one that has been created suspended and
+has not yet run a single instruction — and delivers `Mhook_SetHook`/`Mhook_Unhook`
+pointers to the injected function so hooks can be installed from within the
+target.
+
+```c
+#include "mhook-inject/mhook_inject.h"
+```
+
+### `Mhook_Inject`
+
+```c
+HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params);
+```
+
+Synchronous: allocates a small code + data blob in `TargetProcess`, creates a
+remote thread that loads the companion DLL and calls the injection function,
+waits for the thread to complete, then frees the allocation.  Returns `S_OK` on
+success or an `HRESULT` error code.
+
+### `MHOOK_INJECT_PARAMS`
+
+```c
+typedef struct _MHOOK_INJECT_PARAMS {
+    ULONG  Size;           // sizeof(MHOOK_INJECT_PARAMS) — version guard
+
+    HANDLE TargetProcess;  // requires PROCESS_VM_OPERATION |
+                           //          PROCESS_VM_WRITE | PROCESS_CREATE_THREAD
+
+    // Target function — set EXACTLY ONE of the two forms:
+
+    // Form 1: function pointer in the CALLING process.
+    //   Mhook_Inject locates the module that owns the address, derives its
+    //   RVA, and loads that module in the target process.
+    PVOID  FunctionPointer;
+
+    // Form 2: DLL path + exported function name.
+    //   DllPath is relative to the module that contains Mhook_Inject,
+    //   or an absolute Win32 path.  NOT limited to MAX_PATH.
+    PCWSTR DllPath;
+    PCSTR  FunctionName;
+
+    // Path to mhook.dll for the target process architecture.
+    //   NULL → look for mhook.dll alongside the companion DLL.
+    //   Reserved / always NULL for static builds.
+    PCWSTR MhookDllPath;
+
+    // Optional data block copied verbatim into the target process.
+    PVOID  UserData;
+    SIZE_T UserDataSize;
+} MHOOK_INJECT_PARAMS;
+```
+
+### `MHOOK_INJECT_CONTEXT` (received by the injected function)
+
+```c
+typedef void (__cdecl *MhookInjectedFn)(MHOOK_INJECT_CONTEXT *ctx);
+
+typedef struct _MHOOK_INJECT_CONTEXT {
+    ULONG          Size;        // sizeof(MHOOK_INJECT_CONTEXT)
+    MhookSetHookFn SetHook;     // Mhook_SetHook for the target process
+    MhookUnhookFn  Unhook;      // Mhook_Unhook for the target process
+    PVOID          UserData;    // pointer to the UserData copy in the target
+    SIZE_T         UserDataSize;
+} MHOOK_INJECT_CONTEXT;
+```
+
+### Example
+
+```c
+// hooks.c  — compiled into hooks.dll (see "Static build" notes below)
+#include "mhook-inject/mhook_inject.h"
+
+static NTSTATUS (NTAPI *TrueNtTerminateProcess)(HANDLE, NTSTATUS);
+
+static NTSTATUS NTAPI HookNtTerminateProcess(HANDLE h, NTSTATUS s) {
+    // ... custom logic ...
+    return TrueNtTerminateProcess(h, s);
+}
+
+void __cdecl InstallHooks(MHOOK_INJECT_CONTEXT *ctx) {
+    TrueNtTerminateProcess = NtTerminateProcess;
+    ctx->SetHook((PVOID *)&TrueNtTerminateProcess, HookNtTerminateProcess);
+}
+```
+
+```c
+// injector.c  — caller that creates the suspended process and injects
+#include "mhook-inject/mhook_inject.h"
+
+PROCESS_INFORMATION pi = ...;   // created with CREATE_SUSPENDED
+
+MHOOK_INJECT_PARAMS p = { sizeof(p) };
+p.TargetProcess  = pi.hProcess;
+p.FunctionPointer = InstallHooks;   // or use DllPath + FunctionName
+
+HRESULT hr = Mhook_Inject(&p);     // returns S_OK when hooks are installed
+ResumeThread(pi.hThread);
+```
+
+### Static build — what consumers must link and export
+
+When using the **static** `mhook_inject.lib`, the injection function lives in
+a DLL that is loaded into the target process.  That DLL must:
+
+1. **Link `mhook_inject.lib`** — provides `Mhook_Inject` (for the calling side)
+   and `_internal_Execute` (the remote entry point called by the shellcode).
+
+2. **Link `mhook.lib`** — provides `Mhook_SetHook`/`Mhook_Unhook`, which
+   `_internal_Execute` references directly in static builds.
+
+3. **Re-export `_internal_Execute`** — the shellcode locates and calls this
+   symbol in the companion DLL.  Add it to the DLL's `.def` file:
+
+   ```
+   EXPORTS
+       _internal_Execute        ← re-exported from mhook_inject.lib
+       InstallHooks             ← your injection function
+   ```
+
+   Alternatively pass `/EXPORT:_internal_Execute` to the linker.
+
+The injection DLL may only import from `ntdll.dll` if it needs to run before
+Win32 is initialised (same constraint as `mhook.dll`).
+
+### Dynamic build — what consumers must do
+
+When using **`mhook_inject.dll`**, the DLL itself is the companion that runs in
+the target process.  The user's injection function lives in a **separate DLL**
+that only needs to import from `ntdll.dll`:
+
+- Pass `DllPath` / `FunctionName` (or `FunctionPointer`) in `MHOOK_INJECT_PARAMS`.
+- The user's DLL does **not** need to export `_internal_Execute` or link
+  `mhook_inject.lib`.
+- `mhook_inject.dll` and `mhook.dll` must be present alongside the user's DLL
+  (or supply `MhookDllPath`).
+
+---
+
 ## Building
 
 ### Prerequisites
@@ -105,24 +247,34 @@ All configurations import exclusively from `ntdll.dll`.
 ```
 build/artifacts/
   libmhook/<platform>/<configuration>/
-    mhook.lib            ← link this (static builds: self-contained)
-    mhook_internal.lib   ← intermediate archive (static builds only)
-    mhook.dll            ← DLL (dynamic builds only)
+    mhook.lib              ← link this (static: self-contained; dynamic: import lib)
+    mhook_internal.lib     ← intermediate archive (static builds only)
+    mhook.dll              ← DLL (dynamic builds only)
     mhook.pdb
+  mhook_inject/<platform>/<configuration>/
+    mhook_inject.lib       ← link this (static: self-contained; dynamic: import lib)
+    mhook_inject_internal.lib  ← intermediate archive (static builds only)
+    mhook_inject.dll       ← DLL (dynamic builds only)
+    mhook_inject.pdb
   mhook-unit-tests/<platform>/<configuration>/
     mhook-unit-tests.exe
   ntdll_extra_stub/<platform>/<configuration>/
-    ntdll_extra.lib      ← already bundled into static mhook.lib
+    ntdll_extra.lib        ← already bundled into static mhook.lib and mhook_inject.lib
   mhook_test_uninitialized_inject/<platform>/<configuration>/
     mhook_test_uninitialized_inject.dll
+  mhook_inject_test_companion/<platform>/<configuration>/
+    mhook_inject_test_companion.dll
 ```
 
-**Static library consumers** link only `mhook.lib`.  The `ntdll_extra.lib`
+**Static `mhook.lib` consumers** link only `mhook.lib`.  The `ntdll_extra.lib`
 import stubs (for ntdll symbols absent from the SDK's `ntdll.lib`) are bundled
-into `mhook.lib` at build time and do not need to be specified separately.
+into `mhook.lib` at build time.
 
-**DLL consumers** link `mhook.lib` (the import library) and distribute
-`mhook.dll`.
+**Static `mhook_inject.lib` consumers** link `mhook_inject.lib` + `mhook.lib`
+and must re-export `_internal_Execute` from their companion DLL (see
+[Static build notes](#static-build--what-consumers-must-link-and-export) above).
+
+**DLL consumers** link the respective import library and distribute the DLL.
 
 ---
 
@@ -151,6 +303,9 @@ The test suite covers:
   freshly-created, still-suspended `cmd.exe` before its main thread has
   executed a single instruction, installs a hook on `NtTerminateProcess`, and
   asserts the hook fires when the process eventually exits.
+- **`MhookInjectTest.ExecutesInUninitializedProcess`** — exercises `Mhook_Inject`
+  end-to-end: injects a function into a suspended `cmd.exe` that writes a known
+  marker to stdout, and asserts the marker is received.
 
 ---
 
@@ -207,8 +362,14 @@ src/
     mhook.cpp               Hook engine
   disasm-lib/               Instruction-length disassembler
   ntdll_extra_stub/         Stub DLL for ntdll symbols absent from SDK ntdll.lib
+  mhook-inject/
+    mhook_inject.h          Public API header
+    mhook_inject.cpp        Mhook_Inject implementation (calling-process side)
+    inject_entry.c          _internal_Execute (runs in target process)
+    inject_shellcode_x64/x86.asm  Shellcode stubs
   mhook-unit-tests/         Google Test test runner
-  mhook_test_uninitialized_inject/  Companion DLL for the pre-init hook test
+  mhook_test_uninitialized_inject/  Companion DLL for the pre-init hook test (manual)
+  mhook_inject_test_companion/      Companion DLL for the Mhook_Inject test
 third_party/
   googletest/               Google Test v1.17.0 (git submodule)
 ```
