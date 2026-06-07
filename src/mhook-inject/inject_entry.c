@@ -47,7 +47,7 @@ static void ResumeOtherThreads(void)
 // a MhookInjectContext on the stack, calls the function, and resumes threads.
 // ---------------------------------------------------------------------------
 
-void __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
+NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
 {
     // --- Resolve the target function ---
     PVOID  pTargetFunc = NULL;
@@ -107,9 +107,12 @@ void __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
 
         ((MhookInjectedFn)pTargetFunc)(&ctx);
 
-        pParams->InjectStatus = STATUS_SUCCESS;
+        pParams->InjectStatus = STATUS_SUCCESS;   // also set in-memory for cdb inspection
     }
 
 done:
     ResumeOtherThreads();
+    // Return the status as the thread exit code so Mhook_Inject can read it
+    // via NtQueryInformationThread after the process has exited.
+    return pParams->InjectStatus;
 }

@@ -663,13 +663,22 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     timeout.QuadPart = -300000000LL;  // 30 s in 100-ns units
     st = NtWaitForSingleObject(hThread, FALSE, &timeout);
     if (st == STATUS_TIMEOUT) { hr = MHOOK_INJECT_E_TIMEOUT; goto cleanup; }
-    // The remote thread has finished (_internal_Execute ran + ResumeOtherThreads).
-    // Reading InjectStatus back from remote memory is unreliable: the target process
-    // may have already exited (and its address space freed) by the time we get here,
-    // because _internal_Execute calls ResumeOtherThreads() before returning.
-    // Treat a completed-without-timeout thread as success; the caller's own
-    // logic (e.g. reading a marker from a pipe) verifies the injection outcome.
-    hr = NT_SUCCESS(st) ? S_OK : HrFromNt(st);
+    // The remote thread has finished.  Read the injection result from the thread
+    // exit code rather than remote process memory: the kernel keeps the thread
+    // object alive while hThread is open, so this works even if the target process
+    // has already exited and freed its address space.
+    // _internal_Execute returns STATUS_SUCCESS when the target function was found
+    // and called, STATUS_NOT_FOUND otherwise; that value propagates via rax/eax
+    // through the shellcode ret and becomes the thread's ExitStatus.
+    {
+        THREAD_BASIC_INFORMATION tbi = {};
+        NTSTATUS injectStatus = STATUS_UNSUCCESSFUL;
+        if (NT_SUCCESS(NtQueryInformationThread(hThread, ThreadBasicInformation,
+                                                &tbi, sizeof(tbi), NULL))) {
+            injectStatus = tbi.ExitStatus;
+        }
+        hr = NT_SUCCESS(injectStatus) ? S_OK : HrFromNt(injectStatus);
+    }
     } // end architecture block
 
 cleanup:

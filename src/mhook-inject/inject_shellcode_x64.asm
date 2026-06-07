@@ -61,7 +61,9 @@ CallExecute:
         mov     rcx, rbx            ; _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS*)
         call    rax
 
-        xor     eax, eax
+        ; rax holds the NTSTATUS returned by _internal_Execute; propagate it
+        ; as the thread exit code so Mhook_Inject can read it via
+        ; NtQueryInformationThread(ThreadBasicInformation).ExitStatus.
         add     rsp, 28h
         pop     rbx
         ret

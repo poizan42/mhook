@@ -71,7 +71,8 @@ CallExecute:
         call    eax
         add     esp, 4                  ; __cdecl caller-clean
 
-        xor     eax, eax
+        ; eax holds the NTSTATUS returned by _internal_Execute; propagate it
+        ; as the thread exit code (same mechanism as x64).
         pop     ebx
         pop     ebp
         ret     4                       ; __stdcall: clean lpParam (4 bytes)
