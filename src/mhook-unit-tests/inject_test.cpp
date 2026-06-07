@@ -216,9 +216,14 @@ TEST(MhookInjectTest, DelayedExecutionWithWin32)
     // kernel32.dll and uses GetStdHandle/WriteFile.  This proves the delayed
     // path can load a standard Win32 DLL.
 #ifdef MHOOK_STATIC
+    // Static build: companion is mhook_inject_test_companion.dll (ntdll-only).
+    // Inject_LoadWin32DllAndResume uses LdrLoadDll + LdrGetProcedureAddress to
+    // dynamically load mhook_inject_win32_test_companion.dll at runtime — proving
+    // that a static companion with no Win32 imports can still load Win32 DLLs
+    // after the delay mechanism fires.
     constexpr const wchar_t *kDll    = L"mhook_inject_test_companion.dll";
-    constexpr const char    *kFn     = "Inject_WriteMarkerAndResume";
-    constexpr const char    *kMarker = "MHOOK_INJECT_OK";
+    constexpr const char    *kFn     = "Inject_LoadWin32DllAndResume";
+    constexpr const char    *kMarker = "MHOOK_INJECT_WIN32_OK";
 #else
     constexpr const wchar_t *kDll    = L"mhook_inject_win32_test_companion.dll";
     constexpr const char    *kFn     = "Inject_Win32MarkerAndResume";

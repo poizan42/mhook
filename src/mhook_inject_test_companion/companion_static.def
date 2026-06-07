@@ -1,3 +1,4 @@
 EXPORTS
     _internal_Execute
     Inject_WriteMarkerAndResume
+    Inject_LoadWin32DllAndResume
