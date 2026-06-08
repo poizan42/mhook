@@ -49,41 +49,41 @@
 .NOTES
     Exit code is 0 if every build succeeds and every test passes, 1 otherwise.
 #>
-[CmdletBinding(DefaultParameterSetName = 'CrossProduct')]
+[CmdletBinding(DefaultParameterSetName = 'Matrix')]
 param(
-    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Matrix')]
     [Parameter(ParameterSetName = 'Target')]
     [string]$SolutionDir = $PSScriptRoot,
 
-    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Matrix')]
     [Parameter(ParameterSetName = 'Target')]
     [switch]$NoBuild,
 
-    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Matrix')]
     [Parameter(ParameterSetName = 'Target')]
     [string]$Filter = '*',
 
-    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Matrix')]
     [Parameter(ParameterSetName = 'Target')]
     [int]$TimeoutSeconds = 10,
 
-    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Matrix')]
     [Parameter(ParameterSetName = 'Target')]
     [int]$Repeat = 1,
 
-    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Matrix')]
     [Parameter(ParameterSetName = 'Target')]
     [string]$ResultsDir = (Join-Path $PSScriptRoot 'test-results'),
 
-    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Matrix')]
     [Parameter(ParameterSetName = 'Target')]
     [switch]$KeepResults,
 
-    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Matrix')]
     [ValidateSet('x64', 'x86')]
     [string[]]$Arch = @('x64', 'x86'),
 
-    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Matrix')]
     [ValidateSet('Debug', 'DebugDynamic', 'Release', 'ReleaseDynamic')]
     [string[]]$Configuration = @('Debug', 'DebugDynamic', 'Release', 'ReleaseDynamic'),
 

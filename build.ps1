@@ -25,17 +25,17 @@
 .NOTES
     Exit code is 0 if every configured build succeeds, 1 otherwise.
 #>
-[CmdletBinding(DefaultParameterSetName = 'CrossProduct')]
+[CmdletBinding(DefaultParameterSetName = 'Matrix')]
 param(
-    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Matrix')]
     [Parameter(ParameterSetName = 'Target')]
     [string]$SolutionDir = $PSScriptRoot,
 
-    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Matrix')]
     [ValidateSet('x64', 'x86')]
     [string[]]$Arch = @('x64', 'x86'),
 
-    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Matrix')]
     [ValidateSet('Debug', 'DebugDynamic', 'Release', 'ReleaseDynamic')]
     [string[]]$Configuration = @('Debug', 'DebugDynamic', 'Release', 'ReleaseDynamic'),
 
