@@ -349,6 +349,12 @@ included as a git submodule under `third_party/googletest`).
 # Override the per-configuration timeout (default: 10 s)
 .\run-tests.ps1 -NoBuild -TimeoutSeconds 60
 
+# Run each configuration N times to surface flaky tests (failed iterations keep their artifacts)
+.\run-tests.ps1 -NoBuild -Repeat 10
+
+# Capture Time Travel Debugging traces alongside test logs (requires an elevated session)
+.\run-tests.ps1 -NoBuild -Trace -KeepResults
+
 # Run a single configuration's test binary directly
 .\build\artifacts\mhook-unit-tests\x64\Release\mhook-unit-tests.exe
 
