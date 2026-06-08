@@ -16,6 +16,9 @@
 .PARAMETER Filter
     Google Test filter passed as --gtest_filter.  Defaults to '*' (run all tests).
 
+.PARAMETER TimeoutSeconds
+    Maximum seconds to wait for each test binary before killing it.  Defaults to 10.
+
 .PARAMETER Arch
     Architectures to build and test.  Defaults to all ('x64', 'x86').
     Mutually exclusive with -Target.
@@ -47,6 +50,10 @@ param(
     [string]$Filter = '*',
 
     [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Target')]
+    [int]$TimeoutSeconds = 10,
+
+    [Parameter(ParameterSetName = 'CrossProduct')]
     [ValidateSet('x64', 'x86')]
     [string[]]$Arch = @('x64', 'x86'),
 
@@ -73,6 +80,36 @@ function Get-GtestCounts([string[]]$Lines) {
         if ($line -match '\[\s+FAILED\s+\]\s+(\d+) test')  { $failed = [int]$Matches[1] }
     }
     return @{ Passed = $passed; Failed = $failed }
+}
+
+# ---------------------------------------------------------------------------
+# Run a test executable with a timeout, returning output lines and exit info.
+# Async reads are started before WaitForExit to prevent pipe-buffer deadlock.
+# ---------------------------------------------------------------------------
+function Invoke-TestExe([string]$Exe, [string]$Filter, [int]$TimeoutSeconds) {
+    $psi = [System.Diagnostics.ProcessStartInfo]::new($Exe, "--gtest_filter=$Filter")
+    $psi.UseShellExecute        = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError  = $true
+    $psi.CreateNoWindow         = $true
+
+    $proc = [System.Diagnostics.Process]::Start($psi)
+
+    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+    $stderrTask = $proc.StandardError.ReadToEndAsync()
+
+    $finished = $proc.WaitForExit($TimeoutSeconds * 1000)
+    if (-not $finished) {
+        $proc.Kill($true)   # kills process tree (PS 7+ / .NET 5+)
+        $proc.WaitForExit()
+    }
+    [System.Threading.Tasks.Task]::WhenAll($stdoutTask, $stderrTask).Wait()
+
+    return [pscustomobject]@{
+        Lines    = ($stdoutTask.Result + $stderrTask.Result) -split '\r?\n'
+        ExitCode = if ($finished) { $proc.ExitCode } else { -1 }
+        TimedOut = -not $finished
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -135,12 +172,15 @@ foreach ($cfg in $configs) {
             $testStatus = 'NO EXE'
         } else {
             Write-Host "  Testing  $label ..." -NoNewline
-            $testOut = & $testExe --gtest_filter=$Filter 2>&1
-            $ok      = $LASTEXITCODE -eq 0
-            $counts  = Get-GtestCounts $testOut
-            $total   = $counts.Passed + $counts.Failed
+            $run    = Invoke-TestExe -Exe $testExe -Filter $Filter -TimeoutSeconds $TimeoutSeconds
+            $ok     = -not $run.TimedOut -and $run.ExitCode -eq 0
+            $counts = Get-GtestCounts $run.Lines
+            $total  = $counts.Passed + $counts.Failed
 
-            if ($ok) {
+            if ($run.TimedOut) {
+                $testStatus = 'TIMEOUT'
+                Write-Host " TIMEOUT (>${TimeoutSeconds}s)" -ForegroundColor Yellow
+            } elseif ($ok) {
                 $testStatus = 'PASS'
                 $testDetail = "$($counts.Passed)/$total"
                 Write-Host " PASS ($($counts.Passed)/$total)"
@@ -149,7 +189,7 @@ foreach ($cfg in $configs) {
                 $testDetail = "$($counts.Passed)/$total"
                 Write-Host " FAIL ($($counts.Passed)/$total)"
                 # Show failing test names
-                $testOut | Where-Object { $_ -match '^\[  FAILED  \]' } |
+                $run.Lines | Where-Object { $_ -match '^\[  FAILED  \]' } |
                     Select-Object -First 10 |
                     ForEach-Object { Write-Host "    $_" }
             }
@@ -193,25 +233,27 @@ foreach ($r in $results) {
     $line      = "  {0,-$archWidth}  {1,-$configWidth}  {2,-$buildWidth}  {3,-$testWidth}  {4,-$detailWidth}" `
         -f $r.Arch, $r.Config, $r.Build, $r.TestStatus, $detailCol
 
-    $colour = if ($r.Build -eq 'FAILED' -or $r.TestStatus -eq 'FAIL') { 'Red' }
-              elseif ($r.TestStatus -eq 'PASS')                         { 'Green' }
-              else                                                        { 'White' }
+    $colour = if ($r.Build -eq 'FAILED' -or $r.TestStatus -in 'FAIL', 'TIMEOUT') { 'Red' }
+              elseif ($r.TestStatus -eq 'PASS')                                    { 'Green' }
+              else                                                                  { 'White' }
     Write-Host $line -ForegroundColor $colour
 }
 
 Write-Host ''
 
-$nBuilt  = @($results | Where-Object { $_.Build      -eq 'OK'     }).Count
-$nPass   = @($results | Where-Object { $_.TestStatus -eq 'PASS'   }).Count
-$nFail   = @($results | Where-Object { $_.TestStatus -eq 'FAIL'   }).Count
-$nBuildF = @($results | Where-Object { $_.Build      -eq 'FAILED' }).Count
+$nBuilt   = @($results | Where-Object { $_.Build      -eq 'OK'      }).Count
+$nPass    = @($results | Where-Object { $_.TestStatus -eq 'PASS'    }).Count
+$nFail    = @($results | Where-Object { $_.TestStatus -eq 'FAIL'    }).Count
+$nTimeout = @($results | Where-Object { $_.TestStatus -eq 'TIMEOUT' }).Count
+$nBuildF  = @($results | Where-Object { $_.Build      -eq 'FAILED'  }).Count
 
-$total   = $results.Count
+$total = $results.Count
 Write-Host "$total configurations: $nBuilt built, $nPass passed, $nFail failed" -NoNewline
-if ($nBuildF -gt 0) { Write-Host ", $nBuildF build failure(s)" -NoNewline }
+if ($nTimeout -gt 0) { Write-Host ", $nTimeout timed out" -NoNewline }
+if ($nBuildF  -gt 0) { Write-Host ", $nBuildF build failure(s)" -NoNewline }
 Write-Host ''
 
-$allOk = ($nBuildF -eq 0 -and $nFail -eq 0)
+$allOk = ($nBuildF -eq 0 -and $nFail -eq 0 -and $nTimeout -eq 0)
 if ($allOk) {
     Write-Host 'All checks passed.' -ForegroundColor Green
 } else {

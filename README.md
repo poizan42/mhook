@@ -265,8 +265,17 @@ IDE.
 # Build a specific configuration
 msbuild libmhook.slnx /p:Configuration=Release /p:Platform=x64
 
-# Build and test all 8 configurations
-.\build-and-test.ps1
+# Build all 8 configurations
+.\build.ps1
+
+# Build only x64 configurations
+.\build.ps1 -Arch x64
+
+# Build only Release configurations (both architectures)
+.\build.ps1 -Configuration Release,ReleaseDynamic
+
+# Build exact combinations
+.\build.ps1 -Target x64/Release,x86/Release
 ```
 
 ### Configurations
@@ -323,11 +332,25 @@ Unit tests use [Google Test](https://github.com/google/googletest) (v1.17.0,
 included as a git submodule under `third_party/googletest`).
 
 ```powershell
-# Run all tests for one configuration
-.\build\artifacts\mhook-unit-tests\x64\Release\mhook-unit-tests.exe
+# Build and run all 8 configurations (default behaviour)
+.\run-tests.ps1
 
-# Build and run all 8 configurations
-.\build-and-test.ps1
+# Run tests without rebuilding
+.\run-tests.ps1 -NoBuild
+
+# Run tests for a subset of configurations
+.\run-tests.ps1 -NoBuild -Arch x64
+.\run-tests.ps1 -NoBuild -Configuration Release,ReleaseDynamic
+.\run-tests.ps1 -NoBuild -Target x64/Release,x86/Debug
+
+# Filter to specific test cases
+.\run-tests.ps1 -NoBuild -Filter "InjectTest*"
+
+# Override the per-configuration timeout (default: 10 s)
+.\run-tests.ps1 -NoBuild -TimeoutSeconds 60
+
+# Run a single configuration's test binary directly
+.\build\artifacts\mhook-unit-tests\x64\Release\mhook-unit-tests.exe
 
 # Verify all outputs import only from ntdll.dll
 .\verify-ntdll-only.ps1
@@ -391,7 +414,8 @@ instruction boundaries when building the trampoline for each hook.
 
 ```
 libmhook.slnx               Visual Studio 2022 solution
-build-and-test.ps1          Build all 8 configs and run tests
+build.ps1                   Build all 8 configs (or a filtered subset via -Arch/-Configuration/-Target)
+run-tests.ps1               Build then run tests; -NoBuild skips the build step
 verify-ntdll-only.ps1       Check that all outputs only import from ntdll.dll
 src/
   nt_defs.h                 NT native API types and declarations
