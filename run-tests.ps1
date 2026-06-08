@@ -23,7 +23,7 @@
     Directory under which a timestamped subfolder is created for each invocation.
     Defaults to 'test-results' alongside this script.
 
-.PARAMETER KeepLogs
+.PARAMETER KeepResults
     Keep the run subfolder even when all tests pass.  By default it is deleted on
     a fully successful run.
 
@@ -67,7 +67,7 @@ param(
 
     [Parameter(ParameterSetName = 'CrossProduct')]
     [Parameter(ParameterSetName = 'Target')]
-    [switch]$KeepLogs,
+    [switch]$KeepResults,
 
     [Parameter(ParameterSetName = 'CrossProduct')]
     [ValidateSet('x64', 'x86')]
@@ -307,7 +307,7 @@ if ($allOk) {
     Write-Host 'One or more checks FAILED.' -ForegroundColor Red
 }
 
-if ($allOk -and -not $KeepLogs) {
+if ($allOk -and -not $KeepResults) {
     Remove-Item -Recurse -Force $runDir
 } else {
     Write-Host "Logs saved to: $runDir"
