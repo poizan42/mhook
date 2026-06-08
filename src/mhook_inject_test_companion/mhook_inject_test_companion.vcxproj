@@ -399,13 +399,18 @@
   </ItemGroup>
 
   <!-- Project references: static configs need mhook_inject.lib + mhook.lib
-       to link _internal_Execute and satisfy its Mhook_SetHook/Unhook references. -->
+       to link _internal_Execute and satisfy its Mhook_SetHook/Unhook references.
+       ntdll_extra_stub provides the ntdll.dll import-lib entry for symbols that
+       ntdll.lib omits (e.g. __C_specific_handler for __try/__except on x64). -->
   <ItemGroup Condition="'$(Configuration)'=='Debug' or '$(Configuration)'=='Release'">
     <ProjectReference Include="..\mhook-inject\mhook_inject.vcxproj">
       <Project>{A3B7C2D1-5E4F-4A9B-8C3D-2F1E6A0B7C94}</Project>
     </ProjectReference>
     <ProjectReference Include="..\libmhook.vcxproj">
       <Project>{9AF4E83D-3670-44C8-84B9-54FFD4AFFF21}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\ntdll_extra_stub\ntdll_extra_stub.vcxproj">
+      <Project>{B1E3F8C2-4A5D-4F9E-8B2C-1D6E7A3F9B04}</Project>
     </ProjectReference>
   </ItemGroup>
 

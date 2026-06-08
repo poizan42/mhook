@@ -80,3 +80,19 @@ int __cdecl memcmp(const void *Buf1, const void *Buf2, size_t Size)
     return 0;
 }
 
+// __C_specific_handler — x64 SEH frame handler for __try/__except/__finally.
+// ntdll.dll (x64) exports this; ntdll.dll (x86/SysWOW64) does not.
+// x86 uses frame-based SEH and never calls this symbol.
+#ifdef _M_X64
+EXCEPTION_DISPOSITION __cdecl __C_specific_handler(
+    EXCEPTION_RECORD    *ExceptionRecord,
+    void                *EstablisherFrame,
+    CONTEXT             *ContextRecord,
+    DISPATCHER_CONTEXT  *DispatcherContext)
+{
+    (void)ExceptionRecord; (void)EstablisherFrame;
+    (void)ContextRecord;   (void)DispatcherContext;
+    return ExceptionContinueSearch;
+}
+#endif
+

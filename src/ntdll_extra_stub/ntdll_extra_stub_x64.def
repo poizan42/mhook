@@ -1,0 +1,19 @@
+LIBRARY ntdll.dll
+EXPORTS
+    NtGetNextThread
+    NtWriteVirtualMemory
+    NtReadVirtualMemory
+    NtCreateThreadEx
+    NtWaitForSingleObject
+    NtOpenFile
+    NtReadFile
+    NtQueryInformationProcess
+    LdrLoadDll
+    LdrGetProcedureAddress
+    _snprintf
+    _vsnprintf
+    memset
+    memcpy
+    memmove
+    memcmp
+    __C_specific_handler

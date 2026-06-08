@@ -671,6 +671,18 @@ ULONG NTAPI   vDbgPrintEx(ULONG ComponentId, ULONG Level, PCCH Format, va_list a
 int __cdecl _snprintf(char *Buffer, size_t Count, const char *Format, ...);
 int __cdecl _vsnprintf(char *Buffer, size_t Count, const char *Format, va_list ArgList);
 
+// x64 SEH frame handler — called by OS exception dispatch for __try/__except/
+// __finally.  ntdll.dll (x64) exports this; ntdll.lib omits the entry.
+// ntdll_extra_stub.vcxproj provides the import lib stub for ntdll-only binaries.
+// x86 uses frame-based SEH and never calls this symbol.
+#ifdef _M_X64
+EXCEPTION_DISPOSITION __cdecl __C_specific_handler(
+    EXCEPTION_RECORD    *ExceptionRecord,
+    void                *EstablisherFrame,
+    CONTEXT             *ContextRecord,
+    DISPATCHER_CONTEXT  *DispatcherContext);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

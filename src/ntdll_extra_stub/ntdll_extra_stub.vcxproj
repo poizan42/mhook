@@ -164,11 +164,18 @@
       <NoEntryPoint>true</NoEntryPoint>
     </Link>
   </ItemDefinitionGroup>
+  <!-- x64 exports __C_specific_handler (absent from x86/SysWOW64 ntdll.dll) -->
+  <ItemDefinitionGroup Condition="'$(Platform)'=='x64'">
+    <Link>
+      <ModuleDefinitionFile>ntdll_extra_stub_x64.def</ModuleDefinitionFile>
+    </Link>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ntdll_extra_stub.c" />
   </ItemGroup>
   <ItemGroup>
     <None Include="ntdll_extra_stub.def" />
+    <None Include="ntdll_extra_stub_x64.def" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
