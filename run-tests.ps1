@@ -259,6 +259,8 @@ Write-Host ''
 
 $padWidth        = $Repeat.ToString().Length
 $allIterResults  = @()
+$totalWork       = $Repeat * $configs.Count
+$cfgNum          = 0
 
 for ($iter = 1; $iter -le $Repeat; $iter++) {
     # When Repeat > 1, each iteration gets its own zero-padded subfolder so that
@@ -278,6 +280,11 @@ for ($iter = 1; $iter -le $Repeat; $iter++) {
     foreach ($cfg in $configs) {
         $label   = "$($cfg.MSBuildConfig)|$($cfg.OutArch)"
         $testExe = Join-Path $SolutionDir "build" "artifacts" "mhook-unit-tests" $cfg.OutDir "mhook-unit-tests.exe"
+
+        $cfgNum++
+        $pct    = [int]($cfgNum / $totalWork * 100)
+        $status = if ($Repeat -gt 1) { "Iteration $iter/$Repeat  —  $label" } else { $label }
+        Write-Progress -Activity 'run-tests.ps1' -Status $status -PercentComplete $pct
 
         $buildStatus = if ($NoBuild)              { 'SKIP' }
                        elseif (Test-Path $testExe) { 'OK'   }
@@ -384,6 +391,8 @@ for ($iter = 1; $iter -le $Repeat; $iter++) {
 
     if ($Repeat -gt 1) { Write-Host '' }
 }
+
+Write-Progress -Activity 'run-tests.ps1' -Completed
 
 # ---------------------------------------------------------------------------
 # Aggregate results across all iterations (one row per config)
