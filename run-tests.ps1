@@ -19,6 +19,12 @@
 .PARAMETER TimeoutSeconds
     Maximum seconds to wait for each test binary before killing it.  Defaults to 10.
 
+.PARAMETER Repeat
+    Number of times to run each test configuration.  Defaults to 1.  Use a higher
+    value to catch flaky tests: each iteration's artifacts are deleted immediately
+    after it passes (unless -KeepResults is set), so only failing iterations keep
+    files on disk.
+
 .PARAMETER ResultsDir
     Directory under which a timestamped subfolder is created for each invocation.
     Defaults to 'test-results' alongside this script.
@@ -60,6 +66,10 @@ param(
     [Parameter(ParameterSetName = 'CrossProduct')]
     [Parameter(ParameterSetName = 'Target')]
     [int]$TimeoutSeconds = 10,
+
+    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Target')]
+    [int]$Repeat = 1,
 
     [Parameter(ParameterSetName = 'CrossProduct')]
     [Parameter(ParameterSetName = 'Target')]
@@ -198,66 +208,118 @@ if (-not $NoBuild) {
 
 Write-Host ''
 
-$results = @()
+$padWidth        = $Repeat.ToString().Length
+$allIterResults  = @()
 
-foreach ($cfg in $configs) {
-    $label   = "$($cfg.MSBuildConfig)|$($cfg.OutArch)"
-    $testExe = Join-Path $SolutionDir "build" "artifacts" "mhook-unit-tests" $cfg.OutDir "mhook-unit-tests.exe"
-
-    $buildStatus = if ($NoBuild)              { 'SKIP' }
-                   elseif (Test-Path $testExe) { 'OK'   }
-                   else                        { 'FAILED' }
-
-    $testStatus = $null
-    $testDetail = $null
-
-    if ($buildStatus -in 'OK', 'SKIP') {
-        if (-not (Test-Path $testExe)) {
-            $testStatus = 'NO EXE'
-        } else {
-            Write-Host "  Testing  $label ..." -NoNewline
-            $run    = Invoke-TestExe -Exe $testExe -Filter $Filter -TimeoutSeconds $TimeoutSeconds
-            $ok     = -not $run.TimedOut -and $run.ExitCode -eq 0
-            $counts = Get-GtestCounts $run.Lines
-            $total  = $counts.Passed + $counts.Failed
-
-            $logFile = Join-Path $runDir "$($cfg.OutArch)-$($cfg.MSBuildConfig).log"
-            $run.Lines | Set-Content -Path $logFile -Encoding UTF8
-
-            if ($run.TimedOut) {
-                $testStatus = 'TIMEOUT'
-                Write-Host " TIMEOUT (>${TimeoutSeconds}s)" -ForegroundColor Yellow
-            } elseif ($ok) {
-                $testStatus = 'PASS'
-                $testDetail = "$($counts.Passed)/$total"
-                Write-Host " PASS ($($counts.Passed)/$total)"
-            } else {
-                $testStatus = 'FAIL'
-                $testDetail = "$($counts.Passed)/$total"
-                Write-Host " FAIL ($($counts.Passed)/$total)"
-                # Show failing test names
-                $run.Lines | Where-Object { $_ -match '^\[  FAILED  \]' } |
-                    Select-Object -First 10 |
-                    ForEach-Object { Write-Host "    $_" }
-            }
-        }
-    } else {
-        $testStatus = '-'
+for ($iter = 1; $iter -le $Repeat; $iter++) {
+    # When Repeat > 1, each iteration gets its own zero-padded subfolder so that
+    # passing iterations can be cleaned up independently without disturbing others.
+    $iterDir = if ($Repeat -eq 1) {
+                   $runDir
+               } else {
+                   Join-Path $runDir $iter.ToString().PadLeft($padWidth, '0')
+               }
+    if ($Repeat -gt 1) {
+        $null = New-Item -ItemType Directory -Path $iterDir -Force
+        Write-Host "--- Iteration $iter/$Repeat ---"
     }
 
-    $results += [pscustomobject]@{
-        Arch       = $cfg.OutArch
-        Config     = $cfg.MSBuildConfig
-        Build      = $buildStatus
-        TestStatus = $testStatus
-        TestDetail = $testDetail
+    $iterResults = @()
+
+    foreach ($cfg in $configs) {
+        $label   = "$($cfg.MSBuildConfig)|$($cfg.OutArch)"
+        $testExe = Join-Path $SolutionDir "build" "artifacts" "mhook-unit-tests" $cfg.OutDir "mhook-unit-tests.exe"
+
+        $buildStatus = if ($NoBuild)              { 'SKIP' }
+                       elseif (Test-Path $testExe) { 'OK'   }
+                       else                        { 'FAILED' }
+
+        $testStatus = $null
+        $testDetail = $null
+
+        if ($buildStatus -in 'OK', 'SKIP') {
+            if (-not (Test-Path $testExe)) {
+                $testStatus = 'NO EXE'
+            } else {
+                Write-Host "  Testing  $label ..." -NoNewline
+                $run    = Invoke-TestExe -Exe $testExe -Filter $Filter -TimeoutSeconds $TimeoutSeconds
+                $ok     = -not $run.TimedOut -and $run.ExitCode -eq 0
+                $counts = Get-GtestCounts $run.Lines
+                $total  = $counts.Passed + $counts.Failed
+
+                $logFile = Join-Path $iterDir "$($cfg.OutArch)-$($cfg.MSBuildConfig).log"
+                $run.Lines | Set-Content -Path $logFile -Encoding UTF8
+
+                if ($run.TimedOut) {
+                    $testStatus = 'TIMEOUT'
+                    Write-Host " TIMEOUT (>${TimeoutSeconds}s)" -ForegroundColor Yellow
+                } elseif ($ok) {
+                    $testStatus = 'PASS'
+                    $testDetail = "$($counts.Passed)/$total"
+                    Write-Host " PASS ($($counts.Passed)/$total)"
+                } else {
+                    $testStatus = 'FAIL'
+                    $testDetail = "$($counts.Passed)/$total"
+                    Write-Host " FAIL ($($counts.Passed)/$total)"
+                    # Show failing test names
+                    $run.Lines | Where-Object { $_ -match '^\[  FAILED  \]' } |
+                        Select-Object -First 10 |
+                        ForEach-Object { Write-Host "    $_" }
+                }
+            }
+        } else {
+            $testStatus = '-'
+        }
+
+        $iterResults += [pscustomobject]@{
+            Iter       = $iter
+            Arch       = $cfg.OutArch
+            Config     = $cfg.MSBuildConfig
+            Build      = $buildStatus
+            TestStatus = $testStatus
+            TestDetail = $testDetail
+        }
+    }
+
+    $allIterResults += $iterResults
+
+    # Clean up this iteration's subfolder immediately if everything passed.
+    # Failing iterations keep their artifacts so they can be inspected later.
+    $iterOk = -not ($iterResults | Where-Object { $_.TestStatus -ne 'PASS' })
+    if ($Repeat -gt 1 -and $iterOk -and -not $KeepResults) {
+        Remove-Item -Recurse -Force $iterDir
+    }
+
+    if ($Repeat -gt 1) { Write-Host '' }
+}
+
+# ---------------------------------------------------------------------------
+# Aggregate results across all iterations (one row per config)
+# ---------------------------------------------------------------------------
+$results = foreach ($cfg in $configs) {
+    $rows = @($allIterResults | Where-Object { $_.Arch -eq $cfg.OutArch -and $_.Config -eq $cfg.MSBuildConfig })
+
+    $worst = if ($rows | Where-Object { $_.TestStatus -eq 'TIMEOUT' }) { 'TIMEOUT' }
+             elseif ($rows | Where-Object { $_.TestStatus -eq 'FAIL' }) { 'FAIL'    }
+             elseif ($rows | Where-Object { $_.TestStatus -eq 'PASS' }) { 'PASS'    }
+             else { ($rows | Select-Object -First 1).TestStatus }
+
+    $worstDetail = ($rows | Where-Object { $_.TestStatus -eq $worst } | Select-Object -First 1).TestDetail
+    $passingRuns = @($rows | Where-Object { $_.TestStatus -eq 'PASS' }).Count
+
+    [pscustomobject]@{
+        Arch        = $cfg.OutArch
+        Config      = $cfg.MSBuildConfig
+        Build       = ($rows | Select-Object -First 1).Build
+        TestStatus  = $worst
+        TestDetail  = $worstDetail
+        PassingRuns = $passingRuns
     }
 }
 
 # ---------------------------------------------------------------------------
 # Summary table
 # ---------------------------------------------------------------------------
-Write-Host ''
 Write-Host '=== Summary ==='
 Write-Host ''
 
@@ -267,18 +329,35 @@ $buildWidth  = 6
 $testWidth   = ($results | ForEach-Object { $_.TestStatus.Length } | Measure-Object -Max).Maximum
 $detailWidth = 7
 
-$header = "  {0,-$archWidth}  {1,-$configWidth}  {2,-$buildWidth}  {3,-$testWidth}  {4,-$detailWidth}" `
-    -f 'Arch', 'Config', 'Build', 'Tests', 'Pass/N'
-$sep    = "  {0}  {1}  {2}  {3}  {4}" `
-    -f ('-' * $archWidth), ('-' * $configWidth), ('-' * $buildWidth), ('-' * $testWidth), ('-' * $detailWidth)
+if ($Repeat -gt 1) {
+    $runsLabel = "Runs"
+    $runsWidth = [Math]::Max($runsLabel.Length, "$Repeat/$Repeat".Length)
+
+    $header = "  {0,-$archWidth}  {1,-$configWidth}  {2,-$buildWidth}  {3,-$testWidth}  {4,-$detailWidth}  {5,-$runsWidth}" `
+        -f 'Arch', 'Config', 'Build', 'Tests', 'Pass/N', $runsLabel
+    $sep    = "  {0}  {1}  {2}  {3}  {4}  {5}" `
+        -f ('-' * $archWidth), ('-' * $configWidth), ('-' * $buildWidth), ('-' * $testWidth), ('-' * $detailWidth), ('-' * $runsWidth)
+} else {
+    $header = "  {0,-$archWidth}  {1,-$configWidth}  {2,-$buildWidth}  {3,-$testWidth}  {4,-$detailWidth}" `
+        -f 'Arch', 'Config', 'Build', 'Tests', 'Pass/N'
+    $sep    = "  {0}  {1}  {2}  {3}  {4}" `
+        -f ('-' * $archWidth), ('-' * $configWidth), ('-' * $buildWidth), ('-' * $testWidth), ('-' * $detailWidth)
+}
 
 Write-Host $header
 Write-Host $sep
 
 foreach ($r in $results) {
     $detailCol = if ($r.TestDetail) { $r.TestDetail } else { '' }
-    $line      = "  {0,-$archWidth}  {1,-$configWidth}  {2,-$buildWidth}  {3,-$testWidth}  {4,-$detailWidth}" `
-        -f $r.Arch, $r.Config, $r.Build, $r.TestStatus, $detailCol
+
+    if ($Repeat -gt 1) {
+        $runsCol = "$($r.PassingRuns)/$Repeat"
+        $line    = "  {0,-$archWidth}  {1,-$configWidth}  {2,-$buildWidth}  {3,-$testWidth}  {4,-$detailWidth}  {5,-$runsWidth}" `
+            -f $r.Arch, $r.Config, $r.Build, $r.TestStatus, $detailCol, $runsCol
+    } else {
+        $line    = "  {0,-$archWidth}  {1,-$configWidth}  {2,-$buildWidth}  {3,-$testWidth}  {4,-$detailWidth}" `
+            -f $r.Arch, $r.Config, $r.Build, $r.TestStatus, $detailCol
+    }
 
     $colour = if ($r.Build -eq 'FAILED' -or $r.TestStatus -in 'FAIL', 'TIMEOUT') { 'Red' }
               elseif ($r.TestStatus -eq 'PASS')                                    { 'Green' }
@@ -310,7 +389,7 @@ if ($allOk) {
 if ($allOk -and -not $KeepResults) {
     Remove-Item -Recurse -Force $runDir
 } else {
-    Write-Host "Logs saved to: $runDir"
+    Write-Host "Results saved to: $runDir"
 }
 
 exit ($allOk ? 0 : 1)
