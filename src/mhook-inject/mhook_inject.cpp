@@ -15,8 +15,13 @@
 // Shellcode blobs — assembled by MASM, linked as object code
 // ---------------------------------------------------------------------------
 
-extern "C" void InjectShellcodeEntry();
-extern "C" void InjectShellcodeEnd();
+// Declared as char[] (data symbol) rather than void() (function symbol) so
+// that the MSVC incremental linker does NOT create ILT thunks for them in
+// Debug builds.  ILT thunks are created for PROC symbols; a plain label like
+// InjectShellcodeEnd:: gets the actual address, but InjectShellcodeEntry PROC
+// would get its thunk address, making (End - Entry) produce the wrong size.
+extern "C" char InjectShellcodeEntry[];
+extern "C" char InjectShellcodeEnd[];
 
 // ---------------------------------------------------------------------------
 // HRESULT helpers
