@@ -355,6 +355,9 @@ included as a git submodule under `third_party/googletest`).
 # Capture Time Travel Debugging traces alongside test logs (requires an elevated session)
 .\run-tests.ps1 -NoBuild -Trace -KeepResults
 
+# Stop as soon as one iteration fails (combine with -Repeat and -Trace to capture a trace of the first failure)
+.\run-tests.ps1 -NoBuild -Repeat 100 -Trace -StopOnFailure
+
 # Run a single configuration's test binary directly
 .\build\artifacts\mhook-unit-tests\x64\Release\mhook-unit-tests.exe
 

@@ -40,6 +40,11 @@
     Requires administrative privileges — ttd.exe will fail and the script will
     exit early if the session is not elevated.
 
+.PARAMETER StopOnFailure
+    Stop after the first test failure or timeout.  Useful with -Repeat and
+    -Trace to capture a TTD trace from the first failing iteration without
+    wasting time on subsequent runs.
+
 .PARAMETER Arch
     Architectures to build and test.  Defaults to all ('x64', 'x86').
     Mutually exclusive with -Target.
@@ -89,6 +94,10 @@ param(
     [Parameter(ParameterSetName = 'Matrix')]
     [Parameter(ParameterSetName = 'Target')]
     [switch]$Trace,
+
+    [Parameter(ParameterSetName = 'Matrix')]
+    [Parameter(ParameterSetName = 'Target')]
+    [switch]$StopOnFailure,
 
     [Parameter(ParameterSetName = 'Matrix')]
     [ValidateSet('x64', 'x86')]
@@ -261,6 +270,7 @@ $padWidth        = $Repeat.ToString().Length
 $allIterResults  = @()
 $totalWork       = $Repeat * $configs.Count
 $cfgNum          = 0
+$stopEarly       = $false
 
 for ($iter = 1; $iter -le $Repeat; $iter++) {
     # When Repeat > 1, each iteration gets its own zero-padded subfolder so that
@@ -376,6 +386,12 @@ for ($iter = 1; $iter -le $Repeat; $iter++) {
             TestStatus = $testStatus
             TestDetail = $testDetail
         }
+
+        if ($StopOnFailure -and $testStatus -in 'FAIL', 'TIMEOUT') {
+            Write-Host "  Stopping after first failure (-StopOnFailure)." -ForegroundColor Yellow
+            $stopEarly = $true
+            break
+        }
     }
 
     $allIterResults += $iterResults
@@ -390,6 +406,7 @@ for ($iter = 1; $iter -le $Repeat; $iter++) {
     }
 
     if ($Repeat -gt 1) { Write-Host '' }
+    if ($stopEarly) { break }
 }
 
 Write-Progress -Activity 'run-tests.ps1' -Completed
@@ -399,6 +416,7 @@ Write-Progress -Activity 'run-tests.ps1' -Completed
 # ---------------------------------------------------------------------------
 $results = foreach ($cfg in $configs) {
     $rows = @($allIterResults | Where-Object { $_.Arch -eq $cfg.OutArch -and $_.Config -eq $cfg.MSBuildConfig })
+    if ($rows.Count -eq 0) { continue }
 
     $worst = if ($rows | Where-Object { $_.TestStatus -eq 'TIMEOUT' }) { 'TIMEOUT' }
              elseif ($rows | Where-Object { $_.TestStatus -eq 'FAIL' }) { 'FAIL'    }
