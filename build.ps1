@@ -3,18 +3,46 @@
     Builds the mhook solution for all 8 platform/configuration combinations.
 
 .DESCRIPTION
-    Builds the solution for every configuration and prints a summary table at
+    Builds the solution for every selected configuration and prints a summary table at
     the end showing the build status for every combination.
 
 .PARAMETER SolutionDir
     Root of the mhook repository.  Defaults to the directory containing this script.
 
+.PARAMETER Arch
+    Architectures to build.  Defaults to all ('x64', 'x86').
+    Mutually exclusive with -Target.
+
+.PARAMETER Configuration
+    Build configurations to build.  Defaults to all
+    ('Debug', 'DebugDynamic', 'Release', 'ReleaseDynamic').
+    Mutually exclusive with -Target.
+
+.PARAMETER Target
+    Explicit arch/config combinations to build, e.g. 'x64/Release', 'x86/Debug'.
+    Mutually exclusive with -Arch and -Configuration.
+
 .NOTES
     Exit code is 0 if every configured build succeeds, 1 otherwise.
 #>
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'CrossProduct')]
 param(
-    [string]$SolutionDir = $PSScriptRoot
+    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Target')]
+    [string]$SolutionDir = $PSScriptRoot,
+
+    [Parameter(ParameterSetName = 'CrossProduct')]
+    [ValidateSet('x64', 'x86')]
+    [string[]]$Arch = @('x64', 'x86'),
+
+    [Parameter(ParameterSetName = 'CrossProduct')]
+    [ValidateSet('Debug', 'DebugDynamic', 'Release', 'ReleaseDynamic')]
+    [string[]]$Configuration = @('Debug', 'DebugDynamic', 'Release', 'ReleaseDynamic'),
+
+    [Parameter(ParameterSetName = 'Target')]
+    [ValidateSet('x64/Debug', 'x64/DebugDynamic', 'x64/Release', 'x64/ReleaseDynamic',
+                 'x86/Debug', 'x86/DebugDynamic', 'x86/Release', 'x86/ReleaseDynamic')]
+    [string[]]$Target
 )
 
 Set-StrictMode -Version 3
@@ -53,6 +81,16 @@ $configs = @(
     [pscustomobject]@{ MSBuildPlatform = 'x86';   MSBuildConfig = 'Release';        OutArch = 'Win32'; OutDir = 'Win32\Release' }
     [pscustomobject]@{ MSBuildPlatform = 'x86';   MSBuildConfig = 'ReleaseDynamic'; OutArch = 'Win32'; OutDir = 'Win32\ReleaseDynamic' }
 )
+
+if ($PSCmdlet.ParameterSetName -eq 'Target') {
+    $configs = $configs | Where-Object { "$($_.MSBuildPlatform)/$($_.MSBuildConfig)" -in $Target }
+} else {
+    $configs = $configs | Where-Object { $_.MSBuildPlatform -in $Arch -and $_.MSBuildConfig -in $Configuration }
+}
+if ($configs.Count -eq 0) {
+    Write-Error 'No configurations selected.  Check -Arch, -Configuration, and -Target.'
+    exit 1
+}
 
 # ---------------------------------------------------------------------------
 # Main

@@ -16,14 +16,48 @@
 .PARAMETER Filter
     Google Test filter passed as --gtest_filter.  Defaults to '*' (run all tests).
 
+.PARAMETER Arch
+    Architectures to build and test.  Defaults to all ('x64', 'x86').
+    Mutually exclusive with -Target.
+
+.PARAMETER Configuration
+    Build configurations to build and test.  Defaults to all
+    ('Debug', 'DebugDynamic', 'Release', 'ReleaseDynamic').
+    Mutually exclusive with -Target.
+
+.PARAMETER Target
+    Explicit arch/config combinations to build and test, e.g. 'x64/Release', 'x86/Debug'.
+    Mutually exclusive with -Arch and -Configuration.
+
 .NOTES
     Exit code is 0 if every build succeeds and every test passes, 1 otherwise.
 #>
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'CrossProduct')]
 param(
+    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Target')]
     [string]$SolutionDir = $PSScriptRoot,
+
+    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Target')]
     [switch]$NoBuild,
-    [string]$Filter = '*'
+
+    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Target')]
+    [string]$Filter = '*',
+
+    [Parameter(ParameterSetName = 'CrossProduct')]
+    [ValidateSet('x64', 'x86')]
+    [string[]]$Arch = @('x64', 'x86'),
+
+    [Parameter(ParameterSetName = 'CrossProduct')]
+    [ValidateSet('Debug', 'DebugDynamic', 'Release', 'ReleaseDynamic')]
+    [string[]]$Configuration = @('Debug', 'DebugDynamic', 'Release', 'ReleaseDynamic'),
+
+    [Parameter(ParameterSetName = 'Target')]
+    [ValidateSet('x64/Debug', 'x64/DebugDynamic', 'x64/Release', 'x64/ReleaseDynamic',
+                 'x86/Debug', 'x86/DebugDynamic', 'x86/Release', 'x86/ReleaseDynamic')]
+    [string[]]$Target
 )
 
 Set-StrictMode -Version 3
@@ -55,6 +89,16 @@ $configs = @(
     [pscustomobject]@{ MSBuildPlatform = 'x86';   MSBuildConfig = 'ReleaseDynamic'; OutArch = 'Win32'; OutDir = 'Win32\ReleaseDynamic' }
 )
 
+if ($PSCmdlet.ParameterSetName -eq 'Target') {
+    $configs = $configs | Where-Object { "$($_.MSBuildPlatform)/$($_.MSBuildConfig)" -in $Target }
+} else {
+    $configs = $configs | Where-Object { $_.MSBuildPlatform -in $Arch -and $_.MSBuildConfig -in $Configuration }
+}
+if ($configs.Count -eq 0) {
+    Write-Error 'No configurations selected.  Check -Arch, -Configuration, and -Target.'
+    exit 1
+}
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -62,7 +106,12 @@ $sln = Join-Path $SolutionDir 'libmhook.slnx'
 if (-not (Test-Path $sln)) { Write-Error "Solution not found: $sln"; exit 1 }
 
 if (-not $NoBuild) {
-    & (Join-Path $PSScriptRoot 'build.ps1') -SolutionDir $SolutionDir
+    $buildParams = if ($PSCmdlet.ParameterSetName -eq 'Target') {
+        @{ Target = $Target }
+    } else {
+        @{ Arch = $Arch; Configuration = $Configuration }
+    }
+    & (Join-Path $PSScriptRoot 'build.ps1') -SolutionDir $SolutionDir @buildParams
     if ($LASTEXITCODE -ne 0) { Write-Host '' }  # blank line before test section on build failure
 }
 
