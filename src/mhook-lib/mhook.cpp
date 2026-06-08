@@ -616,8 +616,11 @@ static BOOL SuspendOtherThreads(PBYTE pbCode, DWORD cbBytes) {
 		// grow the handle array if needed
 		if (g_nThreadHandles >= nAllocated) {
 			ULONG nNew = nAllocated ? nAllocated * 2 : 8;
-			HANDLE* pNew = (HANDLE*)RtlReAllocateHeap(RtlProcessHeap(), 0,
-			                   g_hThreadHandles, nNew * sizeof(HANDLE));
+			// RtlReAllocateHeap returns NULL (silently) when BaseAddress is NULL;
+			// use RtlAllocateHeap for the initial allocation instead.
+			HANDLE* pNew = g_hThreadHandles
+				? (HANDLE*)RtlReAllocateHeap(RtlProcessHeap(), 0, g_hThreadHandles, nNew * sizeof(HANDLE))
+				: (HANDLE*)mhook_alloc(nNew * sizeof(HANDLE));
 			if (!pNew) {
 				ODPRINTF(("mhooks: SuspendOtherThreads: allocation failure"));
 				bFailed = TRUE;

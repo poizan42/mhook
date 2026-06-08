@@ -636,6 +636,17 @@ NTSTATUS NTAPI LdrGetProcedureAddress(
 // Heap  (RtlProcessHeap is a macro above — not an ntdll export)
 PVOID   NTAPI RtlAllocateHeap(PVOID HeapHandle, ULONG Flags, SIZE_T Size);
 BOOLEAN NTAPI RtlFreeHeap(PVOID HeapHandle, ULONG Flags, PVOID BaseAddress);
+// RtlReAllocateHeap — resize a heap block in place or by moving it.
+//   HeapHandle  : heap owning the block (e.g. RtlProcessHeap())
+//   Flags       : HEAP_* flags (0 for defaults)
+//   BaseAddress : existing block to resize — MUST be a pointer previously
+//                 returned by RtlAllocateHeap / RtlReAllocateHeap.
+//                 NOTE: passing NULL does NOT behave like RtlAllocateHeap;
+//                 RtlpReAllocateHeapInternal detects NULL, sets last-error to
+//                 success, and returns NULL — i.e. it silently reports failure.
+//                 Use RtlAllocateHeap for the initial allocation.
+//   Size        : new size in bytes
+//   Returns NULL on failure; original block is unchanged.
 PVOID   NTAPI RtlReAllocateHeap(PVOID HeapHandle, ULONG Flags, PVOID BaseAddress, SIZE_T Size);
 
 // Critical section  (RTL_CRITICAL_SECTION defined in winnt.h)
