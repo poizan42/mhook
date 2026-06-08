@@ -33,6 +33,13 @@
     Keep the run subfolder even when all tests pass.  By default it is deleted on
     a fully successful run.
 
+.PARAMETER Trace
+    Wrap each test executable in ttd.exe to capture a Time Travel Debugging trace.
+    Trace files (.run) are saved alongside the log files and follow the same
+    keep/cleanup rules as other artifacts.
+    Requires administrative privileges — ttd.exe will fail and the script will
+    exit early if the session is not elevated.
+
 .PARAMETER Arch
     Architectures to build and test.  Defaults to all ('x64', 'x86').
     Mutually exclusive with -Target.
@@ -80,6 +87,10 @@ param(
     [switch]$KeepResults,
 
     [Parameter(ParameterSetName = 'Matrix')]
+    [Parameter(ParameterSetName = 'Target')]
+    [switch]$Trace,
+
+    [Parameter(ParameterSetName = 'Matrix')]
     [ValidateSet('x64', 'x86')]
     [string[]]$Arch = @('x64', 'x86'),
 
@@ -116,6 +127,17 @@ public static class MhookStreamInterleaver {
 }
 
 # ---------------------------------------------------------------------------
+# Locate ttd.exe: PATH first, then the known WindowsApps fallback location.
+# ---------------------------------------------------------------------------
+function Find-Ttd {
+    $onPath = Get-Command ttd.exe -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+    $fallback = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\ttd.exe'
+    if (Test-Path $fallback) { return $fallback }
+    return $null
+}
+
+# ---------------------------------------------------------------------------
 # Parse Google Test stdout for pass/fail counts
 # ---------------------------------------------------------------------------
 function Get-GtestCounts([string[]]$Lines) {
@@ -131,8 +153,25 @@ function Get-GtestCounts([string[]]$Lines) {
 # Run a test executable with a timeout, returning output lines and exit info.
 # Async reads are started before WaitForExit to prevent pipe-buffer deadlock.
 # ---------------------------------------------------------------------------
-function Invoke-TestExe([string]$Exe, [string]$Filter, [int]$TimeoutSeconds) {
-    $psi = [System.Diagnostics.ProcessStartInfo]::new($Exe, "--gtest_filter=$Filter")
+function Invoke-TestExe([string]$Exe, [string]$Filter, [int]$TimeoutSeconds,
+                        [string]$TtdExe = '', [string]$TtdOutDir = '',
+                        [string]$JsonResultsPath = '') {
+    if ($TtdExe) {
+        $psi = [System.Diagnostics.ProcessStartInfo]::new($TtdExe)
+        # -launch must be the last TTD option; ArgumentList handles quoting for
+        # paths that contain spaces.
+        # TTD does not pipe the child's stdout through its own stdout, so GTest
+        # output is captured via --gtest_output=json instead.
+        $ttdArgs = [System.Collections.Generic.List[string]]::new()
+        $ttdArgs.AddRange([string[]]@('-noUI', '-children', '-replayCpuSupport',
+                                      'IntelAvx2Required', '-passThroughExit',
+                                      '-out', $TtdOutDir, '-launch', $Exe,
+                                      "--gtest_filter=$Filter"))
+        if ($JsonResultsPath) { $ttdArgs.Add("--gtest_output=json:$JsonResultsPath") }
+        foreach ($arg in $ttdArgs) { $psi.ArgumentList.Add($arg) }
+    } else {
+        $psi = [System.Diagnostics.ProcessStartInfo]::new($Exe, "--gtest_filter=$Filter")
+    }
     $psi.UseShellExecute        = $false
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError  = $true
@@ -196,6 +235,16 @@ if (-not (Test-Path $sln)) { Write-Error "Solution not found: $sln"; exit 1 }
 $runDir = Join-Path $ResultsDir (Get-Date -Format 'yyyy-MM-ddTHHmmss')
 $null   = New-Item -ItemType Directory -Path $runDir -Force
 
+$ttdExe = $null
+if ($Trace) {
+    $ttdExe = Find-Ttd
+    if (-not $ttdExe) {
+        Write-Error 'ttd.exe not found on PATH or in %LOCALAPPDATA%\Microsoft\WindowsApps\. Install WinDbg or the Windows SDK to get TTD.'
+        exit 1
+    }
+    Write-Host "TTD      : $ttdExe"
+}
+
 if (-not $NoBuild) {
     $buildParams = if ($PSCmdlet.ParameterSetName -eq 'Target') {
         @{ Target = $Target }
@@ -241,11 +290,54 @@ for ($iter = 1; $iter -le $Repeat; $iter++) {
             if (-not (Test-Path $testExe)) {
                 $testStatus = 'NO EXE'
             } else {
+                # When tracing, GTest results go to a JSON file because the child's
+                # stdout is not piped through TTD.  The file lives in $iterDir and is
+                # cleaned up together with the other per-run artifacts.
+                $jsonPath = if ($ttdExe) {
+                    Join-Path $iterDir "$($cfg.OutArch)-$($cfg.MSBuildConfig).json"
+                } else { '' }
+
                 Write-Host "  Testing  $label ..." -NoNewline
-                $run    = Invoke-TestExe -Exe $testExe -Filter $Filter -TimeoutSeconds $TimeoutSeconds
-                $ok     = -not $run.TimedOut -and $run.ExitCode -eq 0
-                $counts = Get-GtestCounts $run.Lines
-                $total  = $counts.Passed + $counts.Failed
+                $run = Invoke-TestExe -Exe $testExe -Filter $Filter -TimeoutSeconds $TimeoutSeconds `
+                                      -TtdExe $ttdExe -TtdOutDir $iterDir -JsonResultsPath $jsonPath
+
+                # Detect TTD infrastructure failure (e.g. access denied) vs a test
+                # failure.  When TTD itself fails it prints an "Error:" line and the
+                # JSON results file is never written.
+                if ($ttdExe -and $run.ExitCode -ne 0 -and -not (Test-Path $jsonPath)) {
+                    $errLine = $run.Lines | Where-Object { $_ -match '^Error:' } | Select-Object -First 1
+                    Write-Host ''
+                    Write-Error "TTD failed to record (exit $($run.ExitCode))$(if ($errLine) { ': ' + $errLine })"
+                    Write-Error 'TTD requires administrative privileges. Re-run in an elevated session.'
+                    exit 1
+                }
+
+                $ok = -not $run.TimedOut -and $run.ExitCode -eq 0
+
+                # Prefer JSON results (written by the test itself; available in TTD
+                # mode where stdout is not piped through TTD).  Fall back to parsing
+                # the captured stdout lines for non-TTD runs.
+                $counts   = $null
+                $failLines = @()
+                if ($jsonPath -and (Test-Path $jsonPath)) {
+                    try {
+                        $j       = Get-Content $jsonPath -Raw | ConvertFrom-Json
+                        $nFailed = [int]$j.failures + [int]$j.errors
+                        $counts  = @{ Passed = [int]$j.tests - $nFailed; Failed = $nFailed }
+                        foreach ($suite in $j.testsuites) {
+                            foreach ($tc in $suite.testcases) {
+                                if ($tc.result -eq 'FAILED') {
+                                    $failLines += "[  FAILED  ] $($suite.name).$($tc.name)"
+                                }
+                            }
+                        }
+                    } catch {}
+                }
+                if (-not $counts) {
+                    $counts    = Get-GtestCounts $run.Lines
+                    $failLines = @($run.Lines | Where-Object { $_ -match '^\[  FAILED  \]' })
+                }
+                $total = $counts.Passed + $counts.Failed
 
                 $logFile = Join-Path $iterDir "$($cfg.OutArch)-$($cfg.MSBuildConfig).log"
                 $run.Lines | Set-Content -Path $logFile -Encoding UTF8
@@ -261,9 +353,7 @@ for ($iter = 1; $iter -le $Repeat; $iter++) {
                     $testStatus = 'FAIL'
                     $testDetail = "$($counts.Passed)/$total"
                     Write-Host " FAIL ($($counts.Passed)/$total)"
-                    # Show failing test names
-                    $run.Lines | Where-Object { $_ -match '^\[  FAILED  \]' } |
-                        Select-Object -First 10 |
+                    $failLines | Select-Object -First 10 |
                         ForEach-Object { Write-Host "    $_" }
                 }
             }
