@@ -377,7 +377,9 @@ for ($iter = 1; $iter -le $Repeat; $iter++) {
     # Failing iterations keep their artifacts so they can be inspected later.
     $iterOk = -not ($iterResults | Where-Object { $_.TestStatus -ne 'PASS' })
     if ($Repeat -gt 1 -and $iterOk -and -not $KeepResults) {
+        $ProgressPreference = 'SilentlyContinue'
         Remove-Item -Recurse -Force $iterDir
+        $ProgressPreference = 'Continue'
     }
 
     if ($Repeat -gt 1) { Write-Host '' }
@@ -477,7 +479,9 @@ if ($allOk) {
 }
 
 if ($allOk -and -not $KeepResults) {
+    $ProgressPreference = 'SilentlyContinue'
     Remove-Item -Recurse -Force $runDir
+    $ProgressPreference = 'Continue'
 } else {
     Write-Host "Results saved to: $runDir"
 }
