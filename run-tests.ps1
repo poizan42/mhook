@@ -348,6 +348,9 @@ for ($iter = 1; $iter -le $Repeat; $iter++) {
                                 }
                             }
                         }
+                        # JSON is authoritative: override $ok so that TTD's broken
+                        # -passThroughExit (always 0) does not mask test failures.
+                        $ok = -not $run.TimedOut -and $nFailed -eq 0
                     } catch {}
                 }
                 if (-not $counts) {
