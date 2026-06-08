@@ -28,4 +28,6 @@ obj/
 [Rr]elease*/
 _ReSharper*/
 [Tt]est[Rr]esult*
+test-results/*
+!test-results/.gitkeep
 .vs

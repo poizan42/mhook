@@ -19,6 +19,14 @@
 .PARAMETER TimeoutSeconds
     Maximum seconds to wait for each test binary before killing it.  Defaults to 10.
 
+.PARAMETER ResultsDir
+    Directory under which a timestamped subfolder is created for each invocation.
+    Defaults to 'test-results' alongside this script.
+
+.PARAMETER KeepLogs
+    Keep the run subfolder even when all tests pass.  By default it is deleted on
+    a fully successful run.
+
 .PARAMETER Arch
     Architectures to build and test.  Defaults to all ('x64', 'x86').
     Mutually exclusive with -Target.
@@ -54,6 +62,14 @@ param(
     [int]$TimeoutSeconds = 10,
 
     [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Target')]
+    [string]$ResultsDir = (Join-Path $PSScriptRoot 'test-results'),
+
+    [Parameter(ParameterSetName = 'CrossProduct')]
+    [Parameter(ParameterSetName = 'Target')]
+    [switch]$KeepLogs,
+
+    [Parameter(ParameterSetName = 'CrossProduct')]
     [ValidateSet('x64', 'x86')]
     [string[]]$Arch = @('x64', 'x86'),
 
@@ -69,6 +85,25 @@ param(
 
 Set-StrictMode -Version 3
 $ErrorActionPreference = 'Continue'
+
+# Compile a small C# helper once per session.  PowerShell script blocks cannot
+# run on thread-pool threads (no runspace), so we use a plain .NET method for
+# the concurrent stream reads.
+if (-not ([System.Management.Automation.PSTypeName]'MhookStreamInterleaver').Type) {
+    Add-Type -TypeDefinition @'
+using System.Collections.Concurrent;
+using System.IO;
+using System.Threading.Tasks;
+public static class MhookStreamInterleaver {
+    public static Task Drain(TextReader reader, ConcurrentQueue<string> queue) {
+        return Task.Run(() => {
+            string line;
+            while ((line = reader.ReadLine()) != null) queue.Enqueue(line);
+        });
+    }
+}
+'@
+}
 
 # ---------------------------------------------------------------------------
 # Parse Google Test stdout for pass/fail counts
@@ -93,20 +128,26 @@ function Invoke-TestExe([string]$Exe, [string]$Filter, [int]$TimeoutSeconds) {
     $psi.RedirectStandardError  = $true
     $psi.CreateNoWindow         = $true
 
-    $proc = [System.Diagnostics.Process]::Start($psi)
+    $queue = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
+    $proc  = [System.Diagnostics.Process]::Start($psi)
 
-    $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
-    $stderrTask = $proc.StandardError.ReadToEndAsync()
+    # Lines from stdout and stderr are interleaved in arrival order.  Ordering is
+    # line-granular, not byte-exact, because each stream is read independently.
+    # Once a stable PowerShell ships on .NET 11+, use ProcessStartInfo.StandardOutputHandle
+    # and StandardErrorHandle to point both streams at the same pipe write-end for
+    # true byte-exact ordering.
+    $outTask = [MhookStreamInterleaver]::Drain($proc.StandardOutput, $queue)
+    $errTask = [MhookStreamInterleaver]::Drain($proc.StandardError, $queue)
 
     $finished = $proc.WaitForExit($TimeoutSeconds * 1000)
     if (-not $finished) {
         $proc.Kill($true)   # kills process tree (PS 7+ / .NET 5+)
-        $proc.WaitForExit()
     }
-    [System.Threading.Tasks.Task]::WhenAll($stdoutTask, $stderrTask).Wait()
+    # Wait for both drain tasks to finish (pipes EOF when process exits/is killed).
+    [System.Threading.Tasks.Task]::WhenAll($outTask, $errTask).GetAwaiter().GetResult()
 
     return [pscustomobject]@{
-        Lines    = ($stdoutTask.Result + $stderrTask.Result) -split '\r?\n'
+        Lines    = [string[]]$queue.ToArray()
         ExitCode = if ($finished) { $proc.ExitCode } else { -1 }
         TimedOut = -not $finished
     }
@@ -139,8 +180,11 @@ if ($configs.Count -eq 0) {
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-$sln = Join-Path $SolutionDir 'libmhook.slnx'
+$sln    = Join-Path $SolutionDir 'libmhook.slnx'
 if (-not (Test-Path $sln)) { Write-Error "Solution not found: $sln"; exit 1 }
+
+$runDir = Join-Path $ResultsDir (Get-Date -Format 'yyyy-MM-ddTHHmmss')
+$null   = New-Item -ItemType Directory -Path $runDir -Force
 
 if (-not $NoBuild) {
     $buildParams = if ($PSCmdlet.ParameterSetName -eq 'Target') {
@@ -176,6 +220,9 @@ foreach ($cfg in $configs) {
             $ok     = -not $run.TimedOut -and $run.ExitCode -eq 0
             $counts = Get-GtestCounts $run.Lines
             $total  = $counts.Passed + $counts.Failed
+
+            $logFile = Join-Path $runDir "$($cfg.OutArch)-$($cfg.MSBuildConfig).log"
+            $run.Lines | Set-Content -Path $logFile -Encoding UTF8
 
             if ($run.TimedOut) {
                 $testStatus = 'TIMEOUT'
@@ -258,6 +305,12 @@ if ($allOk) {
     Write-Host 'All checks passed.' -ForegroundColor Green
 } else {
     Write-Host 'One or more checks FAILED.' -ForegroundColor Red
+}
+
+if ($allOk -and -not $KeepLogs) {
+    Remove-Item -Recurse -Force $runDir
+} else {
+    Write-Host "Logs saved to: $runDir"
 }
 
 exit ($allOk ? 0 : 1)
