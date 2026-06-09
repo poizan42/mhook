@@ -295,16 +295,10 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
             g_DelayedCtx.UserData = copy;
         }
 
-        /* Hook the entry point and resume the main thread.
-         * Wrapped in __try/__except to diagnose intermittent AV failures:
-         * pParams->InjectStatus is written before each sub-step so that if an
-         * AV fires the step number survives in the low byte of the returned
-         * NTSTATUS (0xDE00'00NN, where NN = last step reached):
-         *   1 = before GetProcessEntryPoint
-         *   2 = before Mhook_SetHook
-         *   3 = before inject_entry ResumeOtherThreads
-         *   4 = completed normally (should not appear in NTSTATUS path)
-         */
+        /* x64: wrap in __try/__except so a crash surfaces as 0xDE00'00NN
+         * (step 1-4) rather than a raw AV.  Not used on x86: __except_handler3/4
+         * and __load_config_used are CRT symbols unavailable in ntdll-only DLLs. */
+#ifdef _M_X64
         pParams->InjectStatus = 1;
         __try {
             PVOID ep = GetProcessEntryPoint();
@@ -314,19 +308,24 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
                 pSetHook((PVOID *)&g_TrueEntryPoint, DelayedEntryThunk);
             }
             pParams->InjectStatus = 3;
-
-            /* Let the main thread run the loader */
             ResumeOtherThreads();
             pParams->InjectStatus = 4;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
-            /* Best-effort: resume the main thread up to 3 suspend levels */
             ResumeOtherThreads();
             ResumeOtherThreads();
             ResumeOtherThreads();
-            /* Encode the last step reached in a custom NTSTATUS so the host
-             * (Mhook_Inject) can report it: 0xDE000001..0xDE000003 */
             return (NTSTATUS)(0xDE000000 | (ULONG)pParams->InjectStatus);
         }
+#else
+        {
+            PVOID ep = GetProcessEntryPoint();
+            if (ep && pSetHook && pUnhook) {
+                g_TrueEntryPoint = (EntryPointFn)ep;
+                pSetHook((PVOID *)&g_TrueEntryPoint, DelayedEntryThunk);
+            }
+            ResumeOtherThreads();
+        }
+#endif
 
         /* Race check: the process may have finished initialising between our
            first check and ResumeOtherThreads.  If we win the CAS the hook
