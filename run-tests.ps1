@@ -39,6 +39,16 @@
     keep/cleanup rules as other artifacts.
     Requires administrative privileges — ttd.exe will fail and the script will
     exit early if the session is not elevated.
+    Mutually exclusive with -Cdb.
+
+.PARAMETER Cdb
+    Path to a CDB commands file.  Each test executable is launched under
+    cdbX64.exe (x64) or cdbX86.exe (x86) with -g -G -cf <script>.
+    The script runs at attach time; use it to set exception handlers, break
+    on access violations, capture dumps, etc.  Test results are read from a
+    GTest JSON file so CDB's own output does not interfere with pass/fail
+    counting.  Mutually exclusive with -Trace.
+    Does not require administrative privileges.
 
 .PARAMETER StopOnFailure
     Stop after the first test failure or timeout.  Useful with -Repeat and
@@ -97,6 +107,10 @@ param(
 
     [Parameter(ParameterSetName = 'Matrix')]
     [Parameter(ParameterSetName = 'Target')]
+    [string]$Cdb = '',
+
+    [Parameter(ParameterSetName = 'Matrix')]
+    [Parameter(ParameterSetName = 'Target')]
     [switch]$StopOnFailure,
 
     [Parameter(ParameterSetName = 'Matrix')]
@@ -147,6 +161,18 @@ function Find-Ttd {
 }
 
 # ---------------------------------------------------------------------------
+# Locate cdbX64.exe / cdbX86.exe: PATH first, then WindowsApps fallback.
+# ---------------------------------------------------------------------------
+function Find-Cdb([string]$OutArch) {
+    $name = if ($OutArch -eq 'x64') { 'cdbX64.exe' } else { 'cdbX86.exe' }
+    $onPath = Get-Command $name -ErrorAction SilentlyContinue
+    if ($onPath) { return $onPath.Source }
+    $fallback = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\$name"
+    if (Test-Path $fallback) { return $fallback }
+    return $null
+}
+
+# ---------------------------------------------------------------------------
 # Parse Google Test stdout for pass/fail counts
 # ---------------------------------------------------------------------------
 function Get-GtestCounts([string[]]$Lines) {
@@ -164,7 +190,8 @@ function Get-GtestCounts([string[]]$Lines) {
 # ---------------------------------------------------------------------------
 function Invoke-TestExe([string]$Exe, [string]$Filter, [int]$TimeoutSeconds,
                         [string]$TtdExe = '', [string]$TtdOutDir = '',
-                        [string]$JsonResultsPath = '') {
+                        [string]$JsonResultsPath = '',
+                        [string]$CdbExe = '', [string]$CdbScript = '') {
     if ($TtdExe) {
         $psi = [System.Diagnostics.ProcessStartInfo]::new($TtdExe)
         # -launch must be the last TTD option; ArgumentList handles quoting for
@@ -178,6 +205,17 @@ function Invoke-TestExe([string]$Exe, [string]$Filter, [int]$TimeoutSeconds,
                                       "--gtest_filter=$Filter"))
         if ($JsonResultsPath) { $ttdArgs.Add("--gtest_output=json:$JsonResultsPath") }
         foreach ($arg in $ttdArgs) { $psi.ArgumentList.Add($arg) }
+    } elseif ($CdbExe) {
+        $psi = [System.Diagnostics.ProcessStartInfo]::new($CdbExe)
+        # -g:  skip initial loader breakpoint (start running immediately).
+        # -G:  skip final exit breakpoint (exit CDB when debuggee exits).
+        # -cf: run commands from the user-supplied script on attach.
+        # Debuggee path and its arguments follow the CDB options directly;
+        # ArgumentList handles quoting for paths that contain spaces.
+        $cdbArgs = [System.Collections.Generic.List[string]]::new()
+        $cdbArgs.AddRange([string[]]@('-g', '-G', '-cf', $CdbScript, $Exe, "--gtest_filter=$Filter"))
+        if ($JsonResultsPath) { $cdbArgs.Add("--gtest_output=json:$JsonResultsPath") }
+        foreach ($arg in $cdbArgs) { $psi.ArgumentList.Add($arg) }
     } else {
         $psi = [System.Diagnostics.ProcessStartInfo]::new($Exe, "--gtest_filter=$Filter")
     }
@@ -244,6 +282,11 @@ if (-not (Test-Path $sln)) { Write-Error "Solution not found: $sln"; exit 1 }
 $runDir = Join-Path $ResultsDir (Get-Date -Format 'yyyy-MM-ddTHHmmss')
 $null   = New-Item -ItemType Directory -Path $runDir -Force
 
+if ($Trace -and $Cdb) {
+    Write-Error '-Trace and -Cdb cannot be used together.'
+    exit 1
+}
+
 $ttdExe = $null
 if ($Trace) {
     $ttdExe = Find-Ttd
@@ -252,6 +295,30 @@ if ($Trace) {
         exit 1
     }
     Write-Host "TTD      : $ttdExe"
+}
+
+$cdbX64Exe = $null; $cdbX86Exe = $null
+if ($Cdb) {
+    if (-not (Test-Path $Cdb)) {
+        Write-Error "CDB script not found: $Cdb"
+        exit 1
+    }
+    if ($configs | Where-Object { $_.OutArch -eq 'x64' }) {
+        $cdbX64Exe = Find-Cdb 'x64'
+        if (-not $cdbX64Exe) {
+            Write-Error 'cdbX64.exe not found on PATH or in %LOCALAPPDATA%\Microsoft\WindowsApps\.'
+            exit 1
+        }
+        Write-Host "CDB x64  : $cdbX64Exe"
+    }
+    if ($configs | Where-Object { $_.OutArch -eq 'Win32' }) {
+        $cdbX86Exe = Find-Cdb 'Win32'
+        if (-not $cdbX86Exe) {
+            Write-Error 'cdbX86.exe not found on PATH or in %LOCALAPPDATA%\Microsoft\WindowsApps\.'
+            exit 1
+        }
+        Write-Host "CDB x86  : $cdbX86Exe"
+    }
 }
 
 if (-not $NoBuild) {
@@ -307,25 +374,35 @@ for ($iter = 1; $iter -le $Repeat; $iter++) {
             if (-not (Test-Path $testExe)) {
                 $testStatus = 'NO EXE'
             } else {
-                # When tracing, GTest results go to a JSON file because the child's
-                # stdout is not piped through TTD.  The file lives in $iterDir and is
-                # cleaned up together with the other per-run artifacts.
-                $jsonPath = if ($ttdExe) {
+                # When running under TTD or CDB, GTest results go to a JSON file.
+                # TTD does not pipe child stdout through its own; CDB does but mixes
+                # debugger output in, so JSON is used in both cases to keep pass/fail
+                # counting clean.  The file lives in $iterDir alongside the log.
+                $cdbForConfig = if ($Cdb) {
+                    if ($cfg.OutArch -eq 'x64') { $cdbX64Exe } else { $cdbX86Exe }
+                } else { '' }
+
+                $jsonPath = if ($ttdExe -or $cdbForConfig) {
                     Join-Path $iterDir "$($cfg.OutArch)-$($cfg.MSBuildConfig).json"
                 } else { '' }
 
                 Write-Host "  Testing  $label ..." -NoNewline
                 $run = Invoke-TestExe -Exe $testExe -Filter $Filter -TimeoutSeconds $TimeoutSeconds `
-                                      -TtdExe $ttdExe -TtdOutDir $iterDir -JsonResultsPath $jsonPath
+                                      -TtdExe $ttdExe -TtdOutDir $iterDir -JsonResultsPath $jsonPath `
+                                      -CdbExe $cdbForConfig -CdbScript $Cdb
 
-                # Detect TTD infrastructure failure (e.g. access denied) vs a test
-                # failure.  When TTD itself fails it prints an "Error:" line and the
-                # JSON results file is never written.
-                if ($ttdExe -and $run.ExitCode -ne 0 -and -not (Test-Path $jsonPath)) {
+                # Detect TTD/CDB infrastructure failure vs a test failure.  When the
+                # runner itself fails it exits non-zero and the JSON results file is
+                # never written.
+                if (($ttdExe -or $cdbForConfig) -and $run.ExitCode -ne 0 -and -not (Test-Path $jsonPath)) {
                     $errLine = $run.Lines | Where-Object { $_ -match '^Error:' } | Select-Object -First 1
                     Write-Host ''
-                    Write-Error "TTD failed to record (exit $($run.ExitCode))$(if ($errLine) { ': ' + $errLine })"
-                    Write-Error 'TTD requires administrative privileges. Re-run in an elevated session.'
+                    if ($ttdExe) {
+                        Write-Error "TTD failed to record (exit $($run.ExitCode))$(if ($errLine) { ': ' + $errLine })"
+                        Write-Error 'TTD requires administrative privileges. Re-run in an elevated session.'
+                    } else {
+                        Write-Error "CDB failed (exit $($run.ExitCode))$(if ($errLine) { ': ' + $errLine })"
+                    }
                     exit 1
                 }
 
@@ -349,7 +426,8 @@ for ($iter = 1; $iter -le $Repeat; $iter++) {
                             }
                         }
                         # JSON is authoritative: override $ok so that TTD's broken
-                        # -passThroughExit (always 0) does not mask test failures.
+                        # -passThroughExit (always 0) and CDB's variable exit code
+                        # do not mask test failures.
                         $ok = -not $run.TimedOut -and $nFailed -eq 0
                     } catch {}
                 }
