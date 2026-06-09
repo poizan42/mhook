@@ -2,8 +2,9 @@
 //
 // _internal_Execute is called by the shellcode after the companion DLL
 // (and, for dynamic builds, mhook.dll) has been loaded.  It resolves the
-// user-supplied injection function, builds a MhookInjectContext, calls the
-// function, and resumes all suspended threads.
+// user-supplied injection function, builds a MhookInjectContext, and calls
+// the function.  Thread management (suspend/resume) is the caller's
+// responsibility; this code never suspends or resumes threads.
 //
 // Only ntdll.dll is imported.
 
@@ -63,31 +64,6 @@ static PVOID GetProcessEntryPoint(void)
 }
 
 // ---------------------------------------------------------------------------
-// ResumeOtherThreads — resume every thread in this process except the caller
-// ---------------------------------------------------------------------------
-
-static void ResumeOtherThreads(void)
-{
-    CLIENT_ID callerCid = NtCurrentClientId();
-    HANDLE hPrev = NULL, hNext;
-
-    while (NT_SUCCESS(NtGetNextThread(NtCurrentProcess(), hPrev,
-            THREAD_SUSPEND_RESUME | THREAD_QUERY_INFORMATION, 0, 0, &hNext)))
-    {
-        if (hPrev)
-            NtClose(hPrev);
-        hPrev = hNext;
-
-        THREAD_BASIC_INFORMATION tbi;
-        NtQueryInformationThread(hNext, ThreadBasicInformation, &tbi, sizeof(tbi), NULL);
-        if (tbi.ClientId.UniqueThread != callerCid.UniqueThread)
-            NtResumeThread(hNext, NULL);
-    }
-    if (hPrev)
-        NtClose(hPrev);
-}
-
-// ---------------------------------------------------------------------------
 // Delayed-execution state
 //
 // Set by _internal_Execute when MHOOK_REMOTE_FLAG_DELAY_UNTIL_INIT is active
@@ -109,7 +85,8 @@ static EntryPointFn       g_TrueEntryPoint;       // set by Mhook_SetHook on EP 
 
 // ---------------------------------------------------------------------------
 // CallDelayedTargetFunction — load DLL if needed, resolve and call the
-// injection function.  Called from DoDelayedEntry and the race-check path.
+// injection function.  Called from DoDelayedEntry and the post-hook
+// race-check path.
 // ---------------------------------------------------------------------------
 
 static void CallDelayedTargetFunction(void)
@@ -186,7 +163,7 @@ PVOID __cdecl DoDelayedEntry(void)
 //
 // pParams points to the MHOOK_INJECT_REMOTE_PARAMS block in the remote
 // allocation.  The function resolves the user's injection function, builds
-// a MhookInjectContext, calls the function, and resumes threads.
+// a MhookInjectContext, and calls the function.
 // ---------------------------------------------------------------------------
 
 NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
@@ -308,12 +285,7 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
                 pSetHook((PVOID *)&g_TrueEntryPoint, DelayedEntryThunk);
             }
             pParams->InjectStatus = 3;
-            ResumeOtherThreads();
-            pParams->InjectStatus = 4;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
-            ResumeOtherThreads();
-            ResumeOtherThreads();
-            ResumeOtherThreads();
             return (NTSTATUS)(0xDE000000 | (ULONG)pParams->InjectStatus);
         }
 #else
@@ -323,13 +295,13 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
                 g_TrueEntryPoint = (EntryPointFn)ep;
                 pSetHook((PVOID *)&g_TrueEntryPoint, DelayedEntryThunk);
             }
-            ResumeOtherThreads();
         }
 #endif
 
-        /* Race check: the process may have finished initialising between our
-           first check and ResumeOtherThreads.  If we win the CAS the hook
-           will still fire later and unhook cleanly (skipping the call). */
+        /* Race check: the process may have finished initialising between the
+           needDelay check above and the hook installation.  If the entry point
+           already fired (or will fire before DoDelayedEntry) we call the
+           function now; otherwise DoDelayedEntry fires and wins the CAS. */
         if (IsProcessInitialized()) {
             if (InterlockedCompareExchange(&g_DelayedCallDone, 1, 0) == 0)
                 CallDelayedTargetFunction();
@@ -354,7 +326,6 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
     }
 
 done:
-    ResumeOtherThreads();
     /* Return the status as the thread exit code so Mhook_Inject can read it
        via NtQueryInformationThread after the process has exited. */
     return pParams->InjectStatus;

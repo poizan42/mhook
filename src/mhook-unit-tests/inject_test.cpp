@@ -83,10 +83,12 @@ TEST(MhookInjectTest, ExecutesInUninitializedProcess)
 
     HRESULT hr = Mhook_Inject(&params);
 
-    // Mhook_Inject is synchronous: the marker has been written and cmd.exe's
-    // main thread resumed by the time Mhook_Inject returns.
+    // Mhook_Inject is synchronous: the injection function has run and the marker
+    // has been written by the time Mhook_Inject returns.  Resume the main thread
+    // so cmd.exe can run and exit, which closes its copy of the write pipe end.
     ASSERT_HRESULT_SUCCEEDED(hr)
         << "Mhook_Inject failed with HRESULT 0x" << std::hex << hr;
+    ResumeThread(pi.hThread);
 
     // --- Close write end in our process so ReadFile returns at EOF ---
     CloseHandle(hWritePipe);
@@ -173,6 +175,9 @@ static bool RunDelayedInjectTest(const wchar_t *dllPath,
     params.Flags         = MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT;
 
     HRESULT hr = Mhook_Inject(&params);
+    // Start the process: it will initialize, fire the entry-point hook, call
+    // the injection function, and write the marker.
+    ResumeThread(pi.hThread);
 
     CloseHandle(hWritePipe);
 
@@ -233,4 +238,99 @@ TEST(MhookInjectTest, DelayedExecutionWithWin32)
     if (!RunDelayedInjectTest(kDll, kFn, kMarker)) {
         GTEST_SKIP() << "Could not create cmd.exe";
     }
+}
+
+// ---------------------------------------------------------------------------
+// DelayedExecutionWithWin32RunningProcess
+//
+// Injects into a cmd.exe that is already running and initialized.
+// MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT detects that the process is already
+// initialized (needDelay = FALSE) and takes the immediate path: no
+// entry-point hook is installed; the injection function is called directly
+// from the injection thread.
+// ---------------------------------------------------------------------------
+
+TEST(MhookInjectTest, DelayedExecutionWithWin32RunningProcess)
+{
+#ifdef MHOOK_STATIC
+    constexpr const wchar_t *kDll    = L"mhook_inject_test_companion.dll";
+    constexpr const char    *kFn     = "Inject_LoadWin32DllAndResume";
+#else
+    constexpr const wchar_t *kDll    = L"mhook_inject_win32_test_companion.dll";
+    constexpr const char    *kFn     = "Inject_Win32MarkerAndResume";
+#endif
+    constexpr const char *kMarker = "MHOOK_INJECT_WIN32_OK";
+
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+
+    // stdin pipe: hold the write end open so cmd.exe blocks waiting for input
+    // rather than exiting before we inject.
+    HANDLE hStdinR, hStdinW;
+    if (!CreatePipe(&hStdinR, &hStdinW, &sa, 0))
+        GTEST_SKIP() << "CreatePipe (stdin) failed: " << GetLastError();
+
+    HANDLE hReadPipe, hWritePipe;
+    if (!CreatePipe(&hReadPipe, &hWritePipe, &sa, 0)) {
+        CloseHandle(hStdinR); CloseHandle(hStdinW);
+        GTEST_SKIP() << "CreatePipe (stdout) failed: " << GetLastError();
+    }
+
+    wchar_t cmdLine[] = L"cmd.exe";
+    STARTUPINFOW si   = { sizeof(si) };
+    si.dwFlags        = STARTF_USESTDHANDLES;
+    si.hStdInput      = hStdinR;
+    si.hStdOutput     = hWritePipe;
+    si.hStdError      = hWritePipe;
+
+    PROCESS_INFORMATION pi = {};
+    BOOL created = CreateProcessW(NULL, cmdLine, NULL, NULL, TRUE,
+                                  CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+    CloseHandle(hStdinR);
+    if (!created) {
+        CloseHandle(hStdinW); CloseHandle(hReadPipe); CloseHandle(hWritePipe);
+        GTEST_SKIP() << "Could not create cmd.exe (" << GetLastError() << ")";
+    }
+
+    // Wait for cmd.exe to finish loader initialization so IsProcessInitialized()
+    // returns TRUE inside the target, making needDelay = FALSE.
+    Sleep(300);
+
+    MHOOK_INJECT_PARAMS params = {};
+    params.Size          = sizeof(params);
+    params.TargetProcess = pi.hProcess;
+    params.DllPath       = kDll;
+    params.FunctionName  = kFn;
+    params.Flags         = MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT;
+
+    HRESULT hr = Mhook_Inject(&params);
+
+    CloseHandle(hWritePipe);
+    CloseHandle(hStdinW);   // EOF on stdin → cmd.exe exits naturally
+
+    std::string output;
+    struct ReadState { HANDLE pipe; std::string *out; };
+    ReadState rs = { hReadPipe, &output };
+    struct ReadThread {
+        static DWORD WINAPI Run(LPVOID p) {
+            ReadState *rs = static_cast<ReadState *>(p);
+            char tmp[1024]; DWORD got;
+            while (ReadFile(rs->pipe, tmp, sizeof(tmp), &got, NULL) && got > 0)
+                rs->out->append(tmp, got);
+            return 0;
+        }
+    };
+    HANDLE hRT = CreateThread(NULL, 0, ReadThread::Run, &rs, 0, NULL);
+    if (hRT) { WaitForSingleObject(hRT, 15000); CloseHandle(hRT); }
+
+    WaitForSingleObject(pi.hProcess, 5000);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    CloseHandle(hReadPipe);
+
+    EXPECT_HRESULT_SUCCEEDED(hr)
+        << "Mhook_Inject (running process) failed: 0x" << std::hex << hr;
+    EXPECT_TRUE(output.find(kMarker) != std::string::npos)
+        << "Expected marker '" << kMarker << "' not found."
+        << " Output: [" << output << "]";
 }

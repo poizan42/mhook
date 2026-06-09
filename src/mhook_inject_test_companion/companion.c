@@ -27,7 +27,6 @@ void __cdecl Inject_WriteMarkerAndResume(MHOOK_INJECT_CONTEXT *ctx)
     }
 
     (void)ctx;  // SetHook/Unhook not used in this test
-    // _internal_Execute calls ResumeOtherThreads() after this returns
 }
 
 // ---------------------------------------------------------------------------
