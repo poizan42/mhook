@@ -390,7 +390,6 @@ Every code path in `mhook.cpp` uses NT native APIs directly:
 |---|---|
 | Memory allocation | `RtlAllocateHeap` / `RtlFreeHeap` (via `RtlProcessHeap()` PEB macro) |
 | Virtual memory | `NtAllocateVirtualMemory`, `NtFreeVirtualMemory`, `NtProtectVirtualMemory` |
-| Instruction cache flush | `NtFlushInstructionCache` |
 | Thread suspension | `NtGetNextThread`, `NtSuspendThread`, `NtResumeThread` |
 | Thread context | `NtGetContextThread`, `NtSetContextThread` |
 | Synchronisation | `RtlInitializeCriticalSection`, `RtlEnterCriticalSection`, `RtlLeaveCriticalSection` |

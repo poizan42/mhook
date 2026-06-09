@@ -475,12 +475,6 @@ NTSTATUS NTAPI NtQueryVirtualMemory(
     SIZE_T                  MemoryInformationLength,
     PSIZE_T                 ReturnLength);
 
-// Instruction cache
-NTSTATUS NTAPI NtFlushInstructionCache(
-    HANDLE      ProcessHandle,
-    PVOID       BaseAddress,
-    SIZE_T      Length);
-
 // System information
 NTSTATUS NTAPI NtQuerySystemInformation(
     NT_SYSTEMINFOCLASS  SystemInformationClass,

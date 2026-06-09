@@ -944,8 +944,6 @@ extern "C" BOOL Mhook_SetHook(PVOID *ppSystemFunction, PVOID pHookFunction) {
 						pbCode = pTrampoline->codeJumpToHookFunction;
 						pbCode = EmitJump(pbCode, (PBYTE)pHookFunction);
 						ODPRINTF(("mhooks: Mhook_SetHook: created reverse trampoline"));
-						NtFlushInstructionCache(NtCurrentProcess(), pTrampoline->codeJumpToHookFunction,
-							pbCode - pTrampoline->codeJumpToHookFunction);
 
 						// update the API itself
 						pbCode = (PBYTE)pSystemFunction;
@@ -961,16 +959,14 @@ extern "C" BOOL Mhook_SetHook(PVOID *ppSystemFunction, PVOID pHookFunction) {
 					pTrampoline->pSystemFunction = (PBYTE)pSystemFunction;
 					pTrampoline->pHookFunction = (PBYTE)pHookFunction;
 
-					// flush instruction cache and restore original protection
-					NtFlushInstructionCache(NtCurrentProcess(), pTrampoline->codeTrampoline, dwInstructionLength);
+					// restore original protection
 					tramBase = pTrampoline; tramSz = sizeof(MHOOKS_TRAMPOLINE);
 					NtProtectVirtualMemory(NtCurrentProcess(), &tramBase, &tramSz,
 					    dwOldProtectTrampolineFunction, &dwOldProtectTrampolineFunction);
 				} else {
 					ODPRINTF(("mhooks: Mhook_SetHook: failed NtProtectVirtualMemory on trampoline"));
 				}
-				// flush instruction cache and restore original protection
-				NtFlushInstructionCache(NtCurrentProcess(), pSystemFunction, dwInstructionLength);
+				// restore original protection
 				sysBase = pSystemFunction; sysSz = dwInstructionLength;
 				NtProtectVirtualMemory(NtCurrentProcess(), &sysBase, &sysSz,
 				    dwOldProtectSystemFunction, &dwOldProtectSystemFunction);
@@ -1018,8 +1014,7 @@ extern "C" BOOL Mhook_Unhook(PVOID *ppHookedFunction) {
 			for (DWORD i = 0; i<pTrampoline->cbOverwrittenCode; i++) {
 				pbCode[i] = pTrampoline->codeUntouched[i];
 			}
-			// flush instruction cache and make memory unwritable
-			NtFlushInstructionCache(NtCurrentProcess(), pTrampoline->pSystemFunction, pTrampoline->cbOverwrittenCode);
+			// restore original protection
 			sysBase = pTrampoline->pSystemFunction; sysSz = pTrampoline->cbOverwrittenCode;
 			NtProtectVirtualMemory(NtCurrentProcess(), &sysBase, &sysSz,
 			    dwOldProtectSystemFunction, &dwOldProtectSystemFunction);
