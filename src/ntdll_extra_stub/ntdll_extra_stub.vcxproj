@@ -130,10 +130,19 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <OutDir>$(SolutionDir)\build\artifacts\$(ShortProjectName)\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)\build\obj\$(ShortProjectName)\$(Platform)\$(Configuration)\</IntDir>
+    <!-- Suppress .textbss: VS 2022 defaults to /ZI (EditAndContinue) for x64 debug,
+         generating an Execute+Read+Write uninitialized section that causes intermittent
+         LdrLoadDll crashes in injected threads. Must be PropertyGroup level to override
+         the toolset default from Microsoft.Cpp.props. -->
+    <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='DebugDynamic|x64'">
     <OutDir>$(SolutionDir)\build\artifacts\$(ShortProjectName)\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)\build\obj\$(ShortProjectName)\$(Platform)\$(Configuration)\</IntDir>
+    <!-- Same /Zi fix as Debug|x64 — see comment above. -->
+    <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <OutDir>$(SolutionDir)\build\artifacts\$(ShortProjectName)\$(Platform)\$(Configuration)\</OutDir>

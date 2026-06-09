@@ -153,11 +153,21 @@
     <TargetName>mhook_inject_test_companion</TargetName>
     <OutDir>$(SolutionDir)\build\artifacts\$(ShortProjectName)\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)\build\obj\$(ShortProjectName)\$(Platform)\$(Configuration)\</IntDir>
+    <!-- /Zi not /ZI: suppress .textbss (Execute+Read+Write uninitialized section).
+         VS 2022 defaults to EditAndContinue (/ZI) for x64 debug when not set explicitly,
+         generating .textbss which causes intermittent LdrLoadDll crashes when this DLL
+         is loaded into a target process from an injected thread. PropertyGroup level is
+         required to override the toolset default from Microsoft.Cpp.props. -->
+    <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='DebugDynamic|x64'">
     <TargetName>mhook_inject_test_companion</TargetName>
     <OutDir>$(SolutionDir)\build\artifacts\$(ShortProjectName)\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)\build\obj\$(ShortProjectName)\$(Platform)\$(Configuration)\</IntDir>
+    <!-- Same /Zi fix as Debug|x64 — see comment above. -->
+    <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <TargetName>mhook_inject_test_companion</TargetName>
@@ -298,6 +308,11 @@
       <SDLCheck>false</SDLCheck>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <OmitDefaultLibName>true</OmitDefaultLibName>
+      <!-- /Zi not /ZI: suppress .textbss (Execute+Read+Write uninitialized section).
+           VS 2022 defaults to EditAndContinue (/ZI) for x64 debug when not set explicitly,
+           generating a .textbss section that causes intermittent LdrLoadDll crashes when
+           this DLL is loaded into a target process from an injected thread. -->
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <AdditionalIncludeDirectories>$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -307,6 +322,7 @@
       <AdditionalDependencies>ntdll.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreAllDefaultLibraries>true</IgnoreAllDefaultLibraries>
       <NoEntryPoint>true</NoEntryPoint>
+      <LinkIncremental>false</LinkIncremental>
     </Link>
   </ItemDefinitionGroup>
 
@@ -323,6 +339,8 @@
       <SDLCheck>false</SDLCheck>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <OmitDefaultLibName>true</OmitDefaultLibName>
+      <!-- Same /Zi fix as Debug|x64 — see comment above. -->
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <AdditionalIncludeDirectories>$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
@@ -332,6 +350,7 @@
       <AdditionalDependencies>ntdll.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreAllDefaultLibraries>true</IgnoreAllDefaultLibraries>
       <NoEntryPoint>true</NoEntryPoint>
+      <LinkIncremental>false</LinkIncremental>
     </Link>
   </ItemDefinitionGroup>
 

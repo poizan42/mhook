@@ -128,6 +128,16 @@
 
   <PropertyGroup Label="UserMacros" />
 
+  <!-- Suppress .textbss for all debug builds.  VS 2022 defaults to /ZI
+       (EditAndContinue) for x64 debug, generating an Execute+Read+Write
+       uninitialized section that causes intermittent LdrLoadDll crashes when
+       this DLL is loaded from an injected thread.  PropertyGroup level
+       overrides the toolset default from Microsoft.Cpp.props. -->
+  <PropertyGroup Condition="'$(UseDebugLibraries)'=='true'">
+    <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    <LinkIncremental>false</LinkIncremental>
+  </PropertyGroup>
+
   <!-- Output paths — all configs -->
   <PropertyGroup>
     <TargetName>mhook_inject_win32_test_companion</TargetName>
@@ -154,7 +164,17 @@
   <ItemDefinitionGroup Condition="'$(UseDebugLibraries)'=='true'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
+      <!-- /Zi not /ZI: suppress .textbss (Execute+Read+Write uninitialized section)
+           that VS 2022 generates by default for x64 debug builds via EditAndContinue.
+           .textbss causes intermittent LdrLoadDll crashes when this DLL is loaded
+           into a target process from an injected thread. -->
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
     </ClCompile>
+    <Link>
+      <!-- Incremental linking is not needed and is incompatible with /Zi; disable it
+           to prevent the linker from adding ILT thunks and other incremental artifacts. -->
+      <LinkIncremental>false</LinkIncremental>
+    </Link>
   </ItemDefinitionGroup>
 
   <ItemDefinitionGroup Condition="'$(UseDebugLibraries)'=='false'">

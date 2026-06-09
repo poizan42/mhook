@@ -142,10 +142,13 @@
     <IntDir>$(SolutionDir)\build\obj\$(ShortProjectName)\$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='DebugDynamic|x64'">
-    <LinkIncremental>true</LinkIncremental>
     <TargetName>mhook</TargetName>
     <OutDir>$(SolutionDir)\build\artifacts\$(ShortProjectName)\$(Platform)\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)\build\obj\$(ShortProjectName)\$(Platform)\$(Configuration)\</IntDir>
+    <!-- Suppress .textbss. PropertyGroup level overrides the toolset default from
+         Microsoft.Cpp.props, which sets EditAndContinue (/ZI) for x64 debug builds. -->
+    <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    <LinkIncremental>false</LinkIncremental>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <LinkIncremental>false</LinkIncremental>
