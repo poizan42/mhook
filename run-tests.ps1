@@ -50,6 +50,11 @@
     counting.  Mutually exclusive with -Trace.
     Does not require administrative privileges.
 
+.PARAMETER CdbArgs
+    Extra command-line options forwarded verbatim to cdb, inserted before the
+    target executable.  For example, -CdbArgs '-o' enables child-process
+    debugging.  Requires -Cdb.
+
 .PARAMETER StopOnFailure
     Stop after the first test failure or timeout.  Useful with -Repeat and
     -Trace to capture a TTD trace from the first failing iteration without
@@ -108,6 +113,10 @@ param(
     [Parameter(ParameterSetName = 'Matrix')]
     [Parameter(ParameterSetName = 'Target')]
     [string]$Cdb = '',
+
+    [Parameter(ParameterSetName = 'Matrix')]
+    [Parameter(ParameterSetName = 'Target')]
+    [string[]]$CdbArgs = @(),
 
     [Parameter(ParameterSetName = 'Matrix')]
     [Parameter(ParameterSetName = 'Target')]
@@ -191,7 +200,8 @@ function Get-GtestCounts([string[]]$Lines) {
 function Invoke-TestExe([string]$Exe, [string]$Filter, [int]$TimeoutSeconds,
                         [string]$TtdExe = '', [string]$TtdOutDir = '',
                         [string]$JsonResultsPath = '',
-                        [string]$CdbExe = '', [string]$CdbScript = '') {
+                        [string]$CdbExe = '', [string]$CdbScript = '',
+                        [string[]]$CdbExtraArgs = @()) {
     if ($TtdExe) {
         $psi = [System.Diagnostics.ProcessStartInfo]::new($TtdExe)
         # -launch must be the last TTD option; ArgumentList handles quoting for
@@ -213,7 +223,9 @@ function Invoke-TestExe([string]$Exe, [string]$Filter, [int]$TimeoutSeconds,
         # Debuggee path and its arguments follow the CDB options directly;
         # ArgumentList handles quoting for paths that contain spaces.
         $cdbArgs = [System.Collections.Generic.List[string]]::new()
-        $cdbArgs.AddRange([string[]]@('-g', '-G', '-cf', $CdbScript, $Exe, "--gtest_filter=$Filter"))
+        $cdbArgs.AddRange([string[]]@('-g', '-G', '-cf', $CdbScript))
+        foreach ($a in $CdbExtraArgs) { $cdbArgs.Add($a) }
+        $cdbArgs.AddRange([string[]]@($Exe, "--gtest_filter=$Filter"))
         if ($JsonResultsPath) { $cdbArgs.Add("--gtest_output=json:$JsonResultsPath") }
         foreach ($arg in $cdbArgs) { $psi.ArgumentList.Add($arg) }
     } else {
@@ -284,6 +296,10 @@ $null   = New-Item -ItemType Directory -Path $runDir -Force
 
 if ($Trace -and $Cdb) {
     Write-Error '-Trace and -Cdb cannot be used together.'
+    exit 1
+}
+if ($CdbArgs.Count -gt 0 -and -not $Cdb) {
+    Write-Error '-CdbArgs requires -Cdb.'
     exit 1
 }
 
@@ -389,7 +405,7 @@ for ($iter = 1; $iter -le $Repeat; $iter++) {
                 Write-Host "  Testing  $label ..." -NoNewline
                 $run = Invoke-TestExe -Exe $testExe -Filter $Filter -TimeoutSeconds $TimeoutSeconds `
                                       -TtdExe $ttdExe -TtdOutDir $iterDir -JsonResultsPath $jsonPath `
-                                      -CdbExe $cdbForConfig -CdbScript $Cdb
+                                      -CdbExe $cdbForConfig -CdbScript $Cdb -CdbExtraArgs $CdbArgs
 
                 # Detect TTD/CDB infrastructure failure vs a test failure.  When the
                 # runner itself fails it exits non-zero and the JSON results file is
