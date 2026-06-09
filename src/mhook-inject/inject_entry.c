@@ -295,15 +295,38 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
             g_DelayedCtx.UserData = copy;
         }
 
-        /* Hook the entry point */
-        PVOID ep = GetProcessEntryPoint();
-        if (ep && pSetHook && pUnhook) {
-            g_TrueEntryPoint = (EntryPointFn)ep;
-            pSetHook((PVOID *)&g_TrueEntryPoint, DelayedEntryThunk);
-        }
+        /* Hook the entry point and resume the main thread.
+         * Wrapped in __try/__except to diagnose intermittent AV failures:
+         * pParams->InjectStatus is written before each sub-step so that if an
+         * AV fires the step number survives in the low byte of the returned
+         * NTSTATUS (0xDE00'00NN, where NN = last step reached):
+         *   1 = before GetProcessEntryPoint
+         *   2 = before Mhook_SetHook
+         *   3 = before inject_entry ResumeOtherThreads
+         *   4 = completed normally (should not appear in NTSTATUS path)
+         */
+        pParams->InjectStatus = 1;
+        __try {
+            PVOID ep = GetProcessEntryPoint();
+            pParams->InjectStatus = 2;
+            if (ep && pSetHook && pUnhook) {
+                g_TrueEntryPoint = (EntryPointFn)ep;
+                pSetHook((PVOID *)&g_TrueEntryPoint, DelayedEntryThunk);
+            }
+            pParams->InjectStatus = 3;
 
-        /* Let the main thread run the loader */
-        ResumeOtherThreads();
+            /* Let the main thread run the loader */
+            ResumeOtherThreads();
+            pParams->InjectStatus = 4;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            /* Best-effort: resume the main thread up to 3 suspend levels */
+            ResumeOtherThreads();
+            ResumeOtherThreads();
+            ResumeOtherThreads();
+            /* Encode the last step reached in a custom NTSTATUS so the host
+             * (Mhook_Inject) can report it: 0xDE000001..0xDE000003 */
+            return (NTSTATUS)(0xDE000000 | (ULONG)pParams->InjectStatus);
+        }
 
         /* Race check: the process may have finished initialising between our
            first check and ResumeOtherThreads.  If we win the CAS the hook

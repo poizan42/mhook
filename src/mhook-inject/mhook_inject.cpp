@@ -560,8 +560,19 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
 
     ULONG ldrRva = 0;
     st = GetExportRvaFromFile(localNtdllPath, "LdrLoadDll", &ldrRva);
+    if (!NT_SUCCESS(st)) { HeapFreePath(localNtdllPath); hr = E_FAIL; goto cleanup; }
+
+#ifdef _M_X64
+    // x64: look up RtlAddFunctionTable / RtlDeleteFunctionTable so the
+    // shellcode can register and later remove dynamic unwind info for its
+    // own frame.  Non-fatal if absent — shellcode guards against NULL.
+    ULONG rtlAddFuncRva = 0, rtlDelFuncRva = 0;
+    GetExportRvaFromFile(localNtdllPath, "RtlAddFunctionTable",    &rtlAddFuncRva);
+    GetExportRvaFromFile(localNtdllPath, "RtlDeleteFunctionTable", &rtlDelFuncRva);
+#endif
+
     HeapFreePath(localNtdllPath);
-    if (!NT_SUCCESS(st)) { hr = E_FAIL; goto cleanup; }
+    localNtdllPath = NULL;
 
     LdrLoadDllFn remoteLdrLoadDll =
         (LdrLoadDllFn)(remoteNtdllBase + ldrRva);
@@ -618,6 +629,43 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     rp.FunctionRva    = functionRva;
     rp.UserData       = rUserData;
     rp.UserDataSize   = userDataBytes;
+
+#ifdef _M_X64
+    // Shellcode-frame unwind registration + deregistration.
+    // ShellcodeRF is a RUNTIME_FUNCTION with offsets relative to ShellcodeBase
+    // (= rCode).  ShellcodeUI contains the raw UNWIND_INFO bytes describing
+    // InjectShellcodeEntry's prolog: push rbx (1 byte) + sub rsp,28h (4 bytes).
+    if (rtlAddFuncRva) {
+        rp.RtlAddFunctionTable    = (PVOID)(remoteNtdllBase + rtlAddFuncRva);
+        rp.RtlDeleteFunctionTable = rtlDelFuncRva
+                                    ? (PVOID)(remoteNtdllBase + rtlDelFuncRva)
+                                    : NULL;
+        rp.ShellcodeBase = (ULONG64)rCode;
+
+        // RUNTIME_FUNCTION offsets (all relative to ShellcodeBase = rCode):
+        rp.ShellcodeRF[0] = 0;               // BeginAddress: start of shellcode
+        rp.ShellcodeRF[1] = (ULONG)codeSize; // EndAddress:   exclusive end
+        rp.ShellcodeRF[2] = (ULONG)(codeSize +
+                             offsetof(MHOOK_INJECT_REMOTE_PARAMS, ShellcodeUI));
+
+        // UNWIND_INFO for: push rbx (CodeOffset=1) + sub rsp,28h (CodeOffset=5)
+        //   Byte 0: Version=1 (bits 0-2), Flags=0 (bits 3-7)        => 0x01
+        //   Byte 1: SizeOfProlog = 5                                  => 0x05
+        //   Byte 2: CountOfCodes = 2                                  => 0x02
+        //   Byte 3: FrameRegister=0, FrameOffset=0                   => 0x00
+        //   Code[0]: CodeOffset=5, UWOP_ALLOC_SMALL(2), OpInfo=4     => 0x05,0x42
+        //            (OpInfo+1)*8=40 == 0x28; codes ordered end→begin
+        //   Code[1]: CodeOffset=1, UWOP_PUSH_NONVOL(0), OpInfo=3(RBX)=> 0x01,0x30
+        rp.ShellcodeUI[0] = 0x01;
+        rp.ShellcodeUI[1] = 0x05;
+        rp.ShellcodeUI[2] = 0x02;
+        rp.ShellcodeUI[3] = 0x00;
+        rp.ShellcodeUI[4] = 0x05;
+        rp.ShellcodeUI[5] = 0x42;
+        rp.ShellcodeUI[6] = 0x01;
+        rp.ShellcodeUI[7] = 0x30;
+    }
+#endif
 
     rp.CompanionPath.Buffer        = (PWSTR)rCompanion;
     rp.CompanionPath.Length        = (USHORT)(companionBytes > 0 ? companionBytes - sizeof(WCHAR) : 0);

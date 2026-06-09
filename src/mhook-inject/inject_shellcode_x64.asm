@@ -19,8 +19,12 @@ PARAM_FunctionRva           EQU 104         ; ULONG (4)
 PARAM__rvapad               EQU 108         ; ULONG (4)
 PARAM_UserData              EQU 112         ; PVOID (8)
 PARAM_UserDataSize          EQU 120         ; SIZE_T (8)
-PARAM_InjectStatus          EQU 128         ; NTSTATUS (4)
-PARAM_LdrCompanionStatus    EQU 132         ; NTSTATUS (4)
+PARAM_InjectStatus           EQU 128         ; NTSTATUS (4)
+PARAM_LdrCompanionStatus     EQU 132         ; NTSTATUS (4)
+PARAM_RtlAddFunctionTable    EQU 136         ; PVOID (8)
+PARAM_RtlDeleteFunctionTable EQU 144         ; PVOID (8)
+PARAM_ShellcodeBase          EQU 152         ; ULONG64 (8)
+PARAM_ShellcodeRF            EQU 160         ; RUNTIME_FUNCTION [3 DWORDs = 12 bytes]
 
         PUBLIC InjectShellcodeEnd
 
@@ -33,6 +37,19 @@ InjectShellcodeEntry PROC
 
         mov     rbx, rcx            ; save MHOOK_INJECT_REMOTE_PARAMS*
 
+        ; --- Register unwind info for this frame so that x64 exception
+        ;     dispatch and WER can unwind through the shellcode frame. ---
+        ; RtlAddFunctionTable(FunctionTable, EntryCount, BaseAddress)
+        mov     rax, qword ptr [rbx + PARAM_RtlAddFunctionTable]
+        test    rax, rax
+        jz      LoadCompanion
+        lea     rcx, [rbx + PARAM_ShellcodeRF]              ; FunctionTable
+        mov     edx, 1                                       ; EntryCount
+        mov     r8,  qword ptr [rbx + PARAM_ShellcodeBase]  ; BaseAddress
+        call    rax
+        ; ignore BOOLEAN return value in rax
+
+LoadCompanion:
         ; --- Load companion DLL ---
         ; LdrLoadDll(NULL, NULL, &CompanionPath, &CompanionHandle)
         xor     ecx, ecx
@@ -42,6 +59,15 @@ InjectShellcodeEntry PROC
         call    qword ptr [rbx + PARAM_LdrLoadDll]
         mov     dword ptr [rbx + PARAM_LdrCompanionStatus], eax
 
+        ; --- Guard: if LdrLoadDll failed CompanionHandle is still NULL.
+        ;     Return LdrCompanionStatus directly instead of crashing through
+        ;     a zero handle. ---
+        cmp     qword ptr [rbx + PARAM_CompanionHandle], 0
+        jne     CallMhook
+        movsxd  rax, dword ptr [rbx + PARAM_LdrCompanionStatus]
+        jmp     Epilog
+
+CallMhook:
         ; --- Optionally load mhook.dll (dynamic builds) ---
         mov     eax, dword ptr [rbx + PARAM_IsDynamic]
         test    eax, eax
@@ -60,10 +86,28 @@ CallExecute:
         add     rax, qword ptr [rbx + PARAM_ExecuteOffset]
         mov     rcx, rbx            ; _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS*)
         call    rax
+        ; rax = NTSTATUS from _internal_Execute; fall through to Epilog
 
-        ; rax holds the NTSTATUS returned by _internal_Execute; propagate it
-        ; as the thread exit code so Mhook_Inject can read it via
-        ; NtQueryInformationThread(ThreadBasicInformation).ExitStatus.
+Epilog:
+        ; --- Deregister the shellcode unwind info before the host frees the
+        ;     allocation.  Safe no-op if RtlAddFunctionTable was skipped or
+        ;     returned FALSE. ---
+        ;
+        ; We must NOT use push rax / pop rax to preserve the return value
+        ; across the call: RtlDeleteFunctionTable homes rcx at [RSP+8], which
+        ; is exactly where push would have stored rax.  Instead, spill eax into
+        ; the InjectStatus field of the params block (in remote heap, not the
+        ; stack), then reload it after the call.
+        ;
+        ; RtlDeleteFunctionTable(FunctionTable)
+        mov     dword ptr [rbx + PARAM_InjectStatus], eax   ; spill NTSTATUS
+        mov     rax, qword ptr [rbx + PARAM_RtlDeleteFunctionTable]
+        test    rax, rax
+        jz      EpilogDone
+        lea     rcx, [rbx + PARAM_ShellcodeRF]              ; same ptr as Add
+        call    rax
+EpilogDone:
+        movsxd  rax, dword ptr [rbx + PARAM_InjectStatus]   ; reload NTSTATUS
         add     rsp, 28h
         pop     rbx
         ret
