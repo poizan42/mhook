@@ -25,7 +25,11 @@ PARAM_LdrCompanionStatus    EQU 72          ; NTSTATUS (4) diagnostic — sizeof
 ; ---------------------------------------------------------------------------
 ShellcodeEntry PROC
         push    rbx
-        sub     rsp, 28h            ; shadow space + alignment
+        ; x64 ABI: RSP is 8 (mod 16) at entry; "push rbx" makes it 0 (mod 16), so
+        ; the allocation must be a multiple of 16 to keep RSP 16-aligned at the
+        ; inner CALLs.  0x28 left it misaligned by 8, which makes callees that use
+        ; 16-byte-aligned locals (e.g. CONTEXT in NtGetContextThread) fail.
+        sub     rsp, 20h            ; 32-byte shadow space, keeps RSP 16-aligned
 
         mov     rbx, rcx            ; save ShellcodeParams*
 
@@ -59,7 +63,7 @@ CallExecute:
         call    rax
 
         xor     eax, eax
-        add     rsp, 28h
+        add     rsp, 20h            ; must match the prolog's "sub rsp, 20h"
         pop     rbx
         ret
 

@@ -33,7 +33,12 @@ PARAM_ShellcodeRF            EQU 160         ; RUNTIME_FUNCTION [3 DWORDs = 12 b
 ; ---------------------------------------------------------------------------
 InjectShellcodeEntry PROC
         push    rbx
-        sub     rsp, 28h            ; shadow space + stack alignment
+        ; x64 ABI: RSP is 8 (mod 16) at entry; after "push rbx" it is 0 (mod 16),
+        ; so the allocation MUST be a multiple of 16 to keep RSP 16-aligned at the
+        ; inner CALLs.  0x20 = the 32-byte shadow space.  (Using 0x28 here left the
+        ; stack misaligned by 8, which made NtGetContextThread in callees fail with
+        ; STATUS_DATATYPE_MISALIGNMENT — CONTEXT requires 16-byte alignment.)
+        sub     rsp, 20h            ; 32-byte shadow space, keeps RSP 16-aligned
 
         mov     rbx, rcx            ; save MHOOK_INJECT_REMOTE_PARAMS*
 
@@ -108,7 +113,7 @@ Epilog:
         call    rax
 EpilogDone:
         movsxd  rax, dword ptr [rbx + PARAM_InjectStatus]   ; reload NTSTATUS
-        add     rsp, 28h
+        add     rsp, 20h            ; must match the prolog's "sub rsp, 20h"
         pop     rbx
         ret
 

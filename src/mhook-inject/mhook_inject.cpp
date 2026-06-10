@@ -648,20 +648,20 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
         rp.ShellcodeRF[2] = (ULONG)(codeSize +
                              offsetof(MHOOK_INJECT_REMOTE_PARAMS, ShellcodeUI));
 
-        // UNWIND_INFO for: push rbx (CodeOffset=1) + sub rsp,28h (CodeOffset=5)
+        // UNWIND_INFO for: push rbx (CodeOffset=1) + sub rsp,20h (CodeOffset=5)
         //   Byte 0: Version=1 (bits 0-2), Flags=0 (bits 3-7)        => 0x01
         //   Byte 1: SizeOfProlog = 5                                  => 0x05
         //   Byte 2: CountOfCodes = 2                                  => 0x02
         //   Byte 3: FrameRegister=0, FrameOffset=0                   => 0x00
-        //   Code[0]: CodeOffset=5, UWOP_ALLOC_SMALL(2), OpInfo=4     => 0x05,0x42
-        //            (OpInfo+1)*8=40 == 0x28; codes ordered end→begin
+        //   Code[0]: CodeOffset=5, UWOP_ALLOC_SMALL(2), OpInfo=3     => 0x05,0x32
+        //            (OpInfo+1)*8=32 == 0x20; codes ordered end→begin
         //   Code[1]: CodeOffset=1, UWOP_PUSH_NONVOL(0), OpInfo=3(RBX)=> 0x01,0x30
         rp.ShellcodeUI[0] = 0x01;
         rp.ShellcodeUI[1] = 0x05;
         rp.ShellcodeUI[2] = 0x02;
         rp.ShellcodeUI[3] = 0x00;
         rp.ShellcodeUI[4] = 0x05;
-        rp.ShellcodeUI[5] = 0x42;
+        rp.ShellcodeUI[5] = 0x32;
         rp.ShellcodeUI[6] = 0x01;
         rp.ShellcodeUI[7] = 0x30;
     }
