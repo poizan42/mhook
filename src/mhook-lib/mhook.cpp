@@ -585,8 +585,6 @@ static VOID ResumeOtherThreads() {
 // instruction pointer is not in the given range.
 //=========================================================================
 static BOOL SuspendOtherThreads(PBYTE pbCode, DWORD cbBytes) {
-	BOOL bRet = FALSE;
-
 	// make sure we're the most important thread in the process
 	THREAD_BASIC_INFORMATION tbi;
 	RtlZeroMemory(&tbi, sizeof(tbi));
@@ -595,31 +593,41 @@ static BOOL SuspendOtherThreads(PBYTE pbCode, DWORD cbBytes) {
 	KPRIORITY hiPri = (KPRIORITY)THREAD_PRIORITY_TIME_CRITICAL;
 	NtSetInformationThread(NtCurrentThread(), ThreadBasePriority, &hiPri, sizeof(hiPri));
 
-	// Walk all threads in this process using NtGetNextThread.
-	// NtGetNextThread returns a new handle to the next thread; we close the
-	// previous handle after each successful call.
-	// hCur is the enumeration cursor: the most recently returned handle, which
-	// MUST be passed back to NtGetNextThread to advance to the next thread.  It
-	// is never reset to NULL mid-walk — doing so would make NtGetNextThread
-	// restart from the first thread and re-suspend it forever.  bCurKept tracks
-	// whether hCur was handed to the resume list (so we don't close it here).
+	// -----------------------------------------------------------------------
+	// Pass 1: enumerate every other thread into g_hThreadHandles, WITHOUT
+	// suspending any of them.  All heap growth happens here, before anything is
+	// frozen, so we can never deadlock on the process-heap lock held by a thread
+	// we just suspended.  NtGetNextThread hands out a fresh handle each call;
+	// hCur is the enumeration cursor and MUST stay valid until the next call —
+	// never reset it to NULL mid-walk or NtGetNextThread restarts from the first
+	// thread.  bCurStored tracks whether hCur has been kept in g_hThreadHandles
+	// (so the top-of-loop cleanup doesn't close a handle we still need).
+	// -----------------------------------------------------------------------
 	HANDLE hCur = NULL;
 	HANDLE hNext = NULL;
-	BOOL bCurKept = FALSE;
+	BOOL bCurStored = FALSE;
 	ULONG nAllocated = 0;
-	BOOL bFailed = FALSE;
+	BOOL bAllocFailed = FALSE;
 
-	while (NT_SUCCESS(NtGetNextThread(NtCurrentProcess(), hCur,
-	        THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
-	        THREAD_SET_CONTEXT   | THREAD_QUERY_INFORMATION,
-	        0, 0, &hNext)))
-	{
-		// The previous cursor handle has served its purpose (advancing the walk).
-		// Close it unless it was stored for ResumeOtherThreads.
-		if (hCur != NULL && !bCurKept)
+	for (;;) {
+		NTSTATUS st = NtGetNextThread(NtCurrentProcess(), hCur,
+		        THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |
+		        THREAD_SET_CONTEXT   | THREAD_QUERY_INFORMATION,
+		        0, 0, &hNext);
+		if (!NT_SUCCESS(st)) {
+			// STATUS_NO_MORE_ENTRIES is the normal terminator; any other failure
+			// means the walk was cut short (only a partial thread set is known).
+			if (st != STATUS_NO_MORE_ENTRIES)
+				ODPRINTF(("mhooks: SuspendOtherThreads: NtGetNextThread failed (status %08X)", (ULONG)st));
+			break;
+		}
+
+		// The previous cursor handle has advanced the walk; close it unless it
+		// was stored for pass 2 / ResumeOtherThreads.
+		if (hCur != NULL && !bCurStored)
 			NtClose(hCur);
 		hCur = hNext;
-		bCurKept = FALSE;
+		bCurStored = FALSE;
 
 		// skip ourselves — but keep hCur as the cursor so the next
 		// NtGetNextThread advances past us rather than restarting the walk
@@ -628,7 +636,7 @@ static BOOL SuspendOtherThreads(PBYTE pbCode, DWORD cbBytes) {
 		if (tbi.ClientId.UniqueThread == NtCurrentClientId().UniqueThread)
 			continue;
 
-		// grow the handle array if needed
+		// grow the handle array if needed (safe: nothing is suspended yet)
 		if (g_nThreadHandles >= nAllocated) {
 			ULONG nNew = nAllocated ? nAllocated * 2 : 8;
 			// RtlReAllocateHeap returns NULL (silently) when BaseAddress is NULL;
@@ -638,41 +646,58 @@ static BOOL SuspendOtherThreads(PBYTE pbCode, DWORD cbBytes) {
 				: (HANDLE*)mhook_alloc(nNew * sizeof(HANDLE));
 			if (!pNew) {
 				ODPRINTF(("mhooks: SuspendOtherThreads: allocation failure"));
-				bFailed = TRUE;
+				bAllocFailed = TRUE;
 				break;
 			}
 			g_hThreadHandles = pNew;
 			nAllocated = nNew;
 		}
 
-		// Attempt to suspend.  SuspendOneThread no longer closes the handle, so
-		// hCur stays valid as the cursor.  On success we also store it for resume
-		// and mark bCurKept, so the next iteration's top-of-loop cleanup leaves it
-		// alone (it is still passed to NtGetNextThread to advance, then owned by
-		// ResumeOtherThreads).  On failure hCur is closed at the top of the next
-		// iteration (or after the loop).
-		if (SuspendOneThread(hCur, pbCode, cbBytes)) {
-			ODPRINTF(("mhooks: SuspendOtherThreads: suspended thread %p", tbi.ClientId.UniqueThread));
-			g_hThreadHandles[g_nThreadHandles++] = hCur;
-			bCurKept = TRUE;
-		} else {
-			ODPRINTF(("mhooks: SuspendOtherThreads: failed to suspend thread %p", tbi.ClientId.UniqueThread));
-		}
+		// store the handle for pass 2; it is still the live cursor, so don't
+		// close it at the top of the next iteration
+		g_hThreadHandles[g_nThreadHandles++] = hCur;
+		bCurStored = TRUE;
 	}
 
-	// close the final cursor handle unless it was handed to the resume list
-	if (hCur != NULL && !bCurKept)
+	// close the final cursor handle unless it was stored for pass 2
+	if (hCur != NULL && !bCurStored)
 		NtClose(hCur);
 
-	bRet = !bFailed;
+	if (bAllocFailed) {
+		// Nothing has been suspended yet, so these must NOT go through
+		// ResumeOtherThreads (that would resume threads we never suspended).
+		// Close the enumerated handles directly and bail.
+		for (ULONG i = 0; i < g_nThreadHandles; i++)
+			NtClose(g_hThreadHandles[i]);
+		mhook_free(g_hThreadHandles);
+		g_hThreadHandles = NULL;
+		g_nThreadHandles = 0;
+		NtSetInformationThread(NtCurrentThread(), ThreadBasePriority, &origPriority, sizeof(origPriority));
+		return FALSE;
+	}
+
+	// -----------------------------------------------------------------------
+	// Pass 2: suspend each enumerated thread.  No heap operations here, so a
+	// thread that happens to hold the process-heap lock cannot deadlock us.
+	// Compact g_hThreadHandles in place to hold only the successfully-suspended
+	// handles; close (and drop) any that fail to suspend.  Per-thread suspend
+	// failures are tolerated, as the original Toolhelp implementation did.
+	// -----------------------------------------------------------------------
+	ULONG nSuspended = 0;
+	for (ULONG i = 0; i < g_nThreadHandles; i++) {
+		HANDLE h = g_hThreadHandles[i];
+		if (SuspendOneThread(h, pbCode, cbBytes)) {
+			ODPRINTF(("mhooks: SuspendOtherThreads: suspended thread %p", h));
+			g_hThreadHandles[nSuspended++] = h;
+		} else {
+			ODPRINTF(("mhooks: SuspendOtherThreads: failed to suspend thread %p", h));
+			NtClose(h);
+		}
+	}
+	g_nThreadHandles = nSuspended;
 
 	NtSetInformationThread(NtCurrentThread(), ThreadBasePriority, &origPriority, sizeof(origPriority));
-
-	if (!bRet) {
-		ODPRINTF(("mhooks: SuspendOtherThreads: problem suspending threads, resuming all."));
-		ResumeOtherThreads();
-	}
-	return bRet;
+	return TRUE;
 }
 
 //=========================================================================

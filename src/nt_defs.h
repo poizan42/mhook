@@ -102,6 +102,9 @@ typedef NTSTATUS *PNTSTATUS;
 #ifndef STATUS_TIMEOUT
 #define STATUS_TIMEOUT              ((NTSTATUS)0x00000102L)
 #endif
+#ifndef STATUS_NO_MORE_ENTRIES
+#define STATUS_NO_MORE_ENTRIES      ((NTSTATUS)0x8000001AL)
+#endif
 
 // Common HRESULT values (normally from winerror.h)
 #ifndef S_OK
