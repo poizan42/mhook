@@ -643,3 +643,68 @@ TEST(MhookInjectTest, AsyncIoStatusBlockGetsStatus)
     EXPECT_TRUE(output.find("MHOOK_INJECT_OK") != std::string::npos)
         << "marker not found. Output: [" << output << "]";
 }
+
+// ASYNC + ApcRoutine (+ IoStatusBlock): the target queues a user APC to the
+// calling thread.  The APC fires when this thread enters an alertable wait, with
+// the caller's ApcContext and the (now-written) IoStatusBlock.
+namespace {
+volatile LONG    g_apcRan    = 0;
+PVOID            g_apcCtx     = nullptr;
+PIO_STATUS_BLOCK g_apcIosb    = nullptr;
+NTSTATUS         g_apcStatus  = 0;
+
+VOID NTAPI TestApcRoutine(PVOID ctx, PIO_STATUS_BLOCK iosb, ULONG reserved)
+{
+    g_apcCtx    = ctx;
+    g_apcIosb   = iosb;
+    g_apcStatus = iosb ? iosb->Status : (NTSTATUS)0xBADBADL;
+    InterlockedExchange(&g_apcRan, 1);
+    (void)reserved;
+}
+} // namespace
+
+TEST(MhookInjectTest, AsyncApcRuns)
+{
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedCmd(&pi, &hRead, &hWrite))
+        GTEST_SKIP() << "Could not create cmd.exe (" << GetLastError() << ")";
+
+    IO_STATUS_BLOCK iosb;
+    iosb.Status = (NTSTATUS)0x7fffffffL;
+    iosb.Information = 0;
+    g_apcRan = 0; g_apcCtx = nullptr; g_apcIosb = nullptr;
+    g_apcStatus = (NTSTATUS)0x7fffffffL;
+    void *kCtx = (void *)(ULONG_PTR)0x00C0FFEEu;
+
+    MHOOK_INJECT_PARAMS params = {};
+    params.Size          = sizeof(params);
+    params.TargetProcess = pi.hProcess;
+    params.DllPath       = L"mhook_inject_test_companion.dll";
+    params.FunctionName  = "Inject_WriteMarkerAndResume";
+    params.Flags         = MHOOK_INJECT_FLAG_ASYNC;   // immediate path: fn runs on the injection thread
+    params.ApcRoutine    = TestApcRoutine;
+    params.ApcContext    = kCtx;
+    params.IoStatusBlock = &iosb;
+
+    HRESULT hr = Mhook_Inject(&params);
+
+    // The APC is queued to THIS (the calling) thread; deliver it via alertable waits.
+    for (int i = 0; i < 200 && !g_apcRan; ++i)
+        SleepEx(50, TRUE);
+
+    bool             ran       = (g_apcRan != 0);
+    PVOID            ctx       = g_apcCtx;
+    PIO_STATUS_BLOCK iosbArg   = g_apcIosb;
+    NTSTATUS         apcStatus = g_apcStatus;
+
+    CloseHandle(hWrite);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead);
+
+    EXPECT_HRESULT_SUCCEEDED(hr) << "async inject failed: 0x" << std::hex << hr;
+    EXPECT_TRUE(ran) << "APC did not run on the calling thread";
+    EXPECT_EQ(ctx, kCtx) << "APC received wrong ApcContext";
+    EXPECT_EQ(iosbArg, &iosb) << "APC received wrong IoStatusBlock pointer";
+    EXPECT_EQ(apcStatus, (NTSTATUS)0)
+        << "APC saw non-success IoStatusBlock.Status: 0x" << std::hex << apcStatus;
+}

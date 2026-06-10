@@ -811,6 +811,19 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
             params->IoStatusBlock->Status      = (NTSTATUS)0x00000103L; // STATUS_PENDING
             params->IoStatusBlock->Information  = 0;
         }
+        if (params->ApcRoutine) {
+            // The target queues a user APC to the calling thread, so give it a
+            // handle to that thread.  ApcRoutine/ApcContext are caller-side VAs
+            // delivered verbatim (the APC runs in the caller's address space).
+            HANDLE hRemoteThread = NULL;
+            st = NtDuplicateObject(NtCurrentProcess(), NtCurrentThread(),
+                                   params->TargetProcess, &hRemoteThread,
+                                   THREAD_SET_CONTEXT, 0, 0);
+            if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; }
+            rp.CallerThread = hRemoteThread;
+            rp.ApcRoutine   = (PVOID)params->ApcRoutine;
+            rp.ApcContext   = params->ApcContext;
+        }
     }
 
 #define WRITE(dst, src, len) \

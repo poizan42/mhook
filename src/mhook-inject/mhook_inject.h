@@ -147,13 +147,12 @@ typedef struct _MHOOK_INJECT_PARAMS {
 
     // Optional.  APC routine queued to the CALLING thread after the injection
     // function returns.  The calling thread must enter an alertable wait (e.g.
-    // SleepEx(.,TRUE)) for the APC to run, as with ReadFileEx.  NULL if unused.
-    // NOTE: reserved — not yet honored; will be implemented in a later version.
+    // SleepEx(.,TRUE)) for the APC to run, as with ReadFileEx.  The APC receives
+    // (ApcContext, IoStatusBlock, Reserved).  NULL if unused.
     PIO_APC_ROUTINE    ApcRoutine;
 
     // Optional.  Context value passed verbatim to ApcRoutine.  Ignored when
     // ApcRoutine is NULL.
-    // NOTE: reserved — see ApcRoutine.
     PVOID              ApcContext;
 
     // Optional.  Pointer to an IO_STATUS_BLOCK in the CALLING process.  Its

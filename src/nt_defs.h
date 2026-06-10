@@ -673,6 +673,21 @@ NTSTATUS NTAPI NtDuplicateObject(
     ULONG       HandleAttributes,
     ULONG       Options);
 
+// User-APC routine type for NtQueueApcThread: three generic arguments delivered
+// verbatim (distinct from PIO_APC_ROUTINE).  An I/O-completion-style callback is
+// emulated by queueing (ApcContext, IoStatusBlock, Reserved) as the three args.
+typedef VOID (NTAPI *PPS_APC_ROUTINE)(
+    PVOID ApcArgument1,
+    PVOID ApcArgument2,
+    PVOID ApcArgument3);
+
+NTSTATUS NTAPI NtQueueApcThread(
+    HANDLE          ThreadHandle,
+    PPS_APC_ROUTINE ApcRoutine,
+    PVOID           ApcArgument1,
+    PVOID           ApcArgument2,
+    PVOID           ApcArgument3);
+
 // I/O
 NTSTATUS NTAPI NtWriteFile(
     HANDLE          FileHandle,

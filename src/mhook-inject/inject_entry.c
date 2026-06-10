@@ -96,13 +96,15 @@ static PVOID              g_DelayedIoStatusBlock;   // caller-side IO_STATUS_BLO
 // NotifyCompletion — report that the injection function has returned.
 //
 // Writes the final status into the caller's IoStatusBlock (cross-process),
-// signals the completion event, then closes the handles duplicated into this
-// process.  Each output is independent and skipped when its handle/pointer is
-// NULL.  (The APC delivery is added in subtask 2.)
+// signals the completion event, queues the caller's APC, then closes the handles
+// duplicated into this process.  Each output is independent and skipped when its
+// handle/pointer is NULL.  apcRoutine/apcContext/ioStatusBlock are caller-side
+// VAs delivered verbatim to the APC (it runs in the caller's address space).
 // ---------------------------------------------------------------------------
 
 static void NotifyCompletion(NTSTATUS status, HANDLE completionEvent,
-                             HANDLE callerProcess, PVOID ioStatusBlock)
+                             HANDLE callerProcess, PVOID ioStatusBlock,
+                             HANDLE callerThread, PVOID apcRoutine, PVOID apcContext)
 {
     if (ioStatusBlock && callerProcess) {
         IO_STATUS_BLOCK iosb;
@@ -112,9 +114,13 @@ static void NotifyCompletion(NTSTATUS status, HANDLE completionEvent,
     }
     if (completionEvent)
         NtSetEvent(completionEvent, NULL);
+    if (apcRoutine && callerThread)
+        NtQueueApcThread(callerThread, (PPS_APC_ROUTINE)apcRoutine,
+                         apcContext, ioStatusBlock, NULL);
 
     if (completionEvent) NtClose(completionEvent);
     if (callerProcess)   NtClose(callerProcess);
+    if (callerThread)    NtClose(callerThread);
 }
 
 // ---------------------------------------------------------------------------
@@ -190,10 +196,12 @@ static void CallDelayedTargetFunction(void)
 
     /* Report completion to the caller (sync-wait event or async notification). */
     NotifyCompletion(STATUS_SUCCESS, g_DelayedCompletionEvent,
-                     g_DelayedCallerProcess, g_DelayedIoStatusBlock);
+                     g_DelayedCallerProcess, g_DelayedIoStatusBlock,
+                     g_DelayedCallerThread, g_DelayedApcRoutine, g_DelayedApcContext);
     g_DelayedCompletionEvent = NULL;
     g_DelayedCallerProcess   = NULL;
     g_DelayedIoStatusBlock   = NULL;
+    g_DelayedCallerThread    = NULL;
 
     /* Free heap copies */
     if (g_DelayedCtx.UserData) {
@@ -279,7 +287,8 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
     /* For non-delayed path: nothing to do if the function wasn't found */
     if (!needDelay && !pTargetFunc) {
         NotifyCompletion(pParams->InjectStatus, pParams->CompletionEvent,
-                         pParams->CallerProcess, pParams->IoStatusBlock);
+                         pParams->CallerProcess, pParams->IoStatusBlock,
+                         pParams->CallerThread, pParams->ApcRoutine, pParams->ApcContext);
         FreeAllocationAndExitThread(pParams, pParams->InjectStatus);
     }
 
@@ -381,7 +390,8 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
                completion with the error now or the caller would wait forever. */
             NTSTATUS err = (NTSTATUS)(0xDE000000 | (ULONG)pParams->InjectStatus);
             NotifyCompletion(err, pParams->CompletionEvent,
-                             pParams->CallerProcess, pParams->IoStatusBlock);
+                             pParams->CallerProcess, pParams->IoStatusBlock,
+                             pParams->CallerThread, pParams->ApcRoutine, pParams->ApcContext);
             FreeAllocationAndExitThread(pParams, err);
         }
 #else
@@ -437,6 +447,7 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
        exit.  The exit status becomes the thread ExitStatus (read by Mhook_Inject
        via NtQueryInformationThread in synchronous mode). */
     NotifyCompletion(pParams->InjectStatus, pParams->CompletionEvent,
-                     pParams->CallerProcess, pParams->IoStatusBlock);
+                     pParams->CallerProcess, pParams->IoStatusBlock,
+                     pParams->CallerThread, pParams->ApcRoutine, pParams->ApcContext);
     FreeAllocationAndExitThread(pParams, pParams->InjectStatus);
 }
