@@ -81,10 +81,15 @@ target.
 HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params);
 ```
 
-Synchronous: allocates a small code + data blob in `TargetProcess`, creates a
-remote thread that loads the companion DLL and calls the injection function,
-waits for the thread to complete, then frees the allocation.  Returns `S_OK` on
-success or an `HRESULT` error code.
+Allocates a small code + data blob in `TargetProcess` and creates a remote thread
+that loads the companion DLL and calls the injection function.  By default the
+call is **synchronous** — it blocks until the injection function returns (with
+`DELAY_UNTIL_INIT`, until the deferred call fires) and reports the result in the
+return value.  With `MHOOK_INJECT_FLAG_ASYNC` it returns `S_OK` as soon as the
+remote thread is created and reports completion out-of-band (see [Flags](#flags)).
+The remote allocation is freed by the target itself, so an async fire-and-forget
+injection needs no further bookkeeping from the caller.  Returns `S_OK` on success
+or an `HRESULT` error code.
 
 #### Error codes
 
@@ -148,14 +153,26 @@ typedef struct _MHOOK_INJECT_PARAMS {
 
     // Combination of MHOOK_INJECT_FLAG_* values (see below); 0 = default.
     ULONG  Flags;
+
+    // Async completion — only used when MHOOK_INJECT_FLAG_ASYNC is set; each is
+    // optional (NULL = skip).  All NULL = pure fire-and-forget.
+    HANDLE           Event;         // signalled when the injection fn returns
+    PIO_APC_ROUTINE  ApcRoutine;    // user APC queued to the CALLING thread
+    PVOID            ApcContext;    // context passed verbatim to ApcRoutine
+    PIO_STATUS_BLOCK IoStatusBlock; // receives the final NTSTATUS (Status field)
 } MHOOK_INJECT_PARAMS;
 ```
+
+(`NTSTATUS`, `IO_STATUS_BLOCK` / `PIO_STATUS_BLOCK`, and `PIO_APC_ROUTINE` are
+defined by `mhook_inject.h` itself under include guards, so the header is
+self-contained and does not require `<winternl.h>`.)
 
 ### Flags
 
 | Flag | Value | Description |
 |---|---|---|
 | `MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT` | `0x1` | Defer the injection function until the process has completed loader initialisation (`PEB_LDR_DATA.Initialized == TRUE`) so that Win32 APIs are safe to call. |
+| `MHOOK_INJECT_FLAG_ASYNC` | `0x2` | Return as soon as the remote thread is created; report completion via the `Event` / `IoStatusBlock` / `ApcRoutine` fields instead of blocking. |
 
 **`MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT`** — when set, `Mhook_Inject` installs a
 hook on the process entry point instead of calling the injection function
@@ -183,6 +200,44 @@ ntdll-only import table (so it can be loaded before Win32 is available), but the
 injection *function itself* can call Win32 APIs at runtime — including
 `LdrLoadDll` to load a Win32-dependent DLL and `LdrGetProcedureAddress` to
 call into it.
+
+**`MHOOK_INJECT_FLAG_ASYNC`** — by default `Mhook_Inject` is synchronous: it
+blocks until the injection function has returned (even with `DELAY_UNTIL_INIT`,
+in which case it blocks until the deferred call fires). With `ASYNC` set it
+returns `S_OK` once the remote thread is created, and completion is reported
+through whichever of these are non-NULL:
+
+- **`Event`** — duplicated into the target and set when the injection function returns.
+- **`IoStatusBlock`** — its `Status` is set to `STATUS_PENDING` before the call
+  returns and overwritten with the final `NTSTATUS` on completion (the target
+  writes it back across the process boundary).
+- **`ApcRoutine` / `ApcContext`** — a user APC `(ApcContext, IoStatusBlock, Reserved)`
+  queued to the **calling thread**; it runs only while that thread is in an
+  alertable wait (e.g. `SleepEx(., TRUE)`), as with `ReadFileEx`.
+
+All four NULL is pure fire-and-forget. Delivering `IoStatusBlock` / `ApcRoutine`
+duplicates a handle to the calling process / thread into the target (which already
+holds `PROCESS_ALL_ACCESS`).
+
+```c
+// Async: return immediately, learn of completion via an event
+HANDLE done = CreateEventW(NULL, FALSE, FALSE, NULL);
+MHOOK_INJECT_PARAMS p = { sizeof(p) };
+p.TargetProcess   = pi.hProcess;
+p.FunctionPointer = InstallHooks;
+p.Flags           = MHOOK_INJECT_FLAG_ASYNC;
+p.Event           = done;
+
+Mhook_Inject(&p);                       // returns S_OK once the thread is created
+// ... do other work ...
+WaitForSingleObject(done, INFINITE);    // the injection function has now returned
+```
+
+> **Caveat (synchronous `DELAY_UNTIL_INIT` on a suspended target):** the deferred
+> call fires only when the target's main thread reaches its entry point, so a
+> *synchronous* delayed injection into a `CREATE_SUSPENDED` process blocks until
+> you let the target run (e.g. resume it from another thread) or the 30 s timeout
+> elapses. Resume the target concurrently, or use `ASYNC`.
 
 ### `MHOOK_INJECT_CONTEXT` (received by the injected function)
 

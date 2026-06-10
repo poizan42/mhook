@@ -72,7 +72,7 @@ On `SetHook`, the library: suspends all other threads (via `NtGetNextThread` + `
 
 ### Remote injection (`src/mhook-inject/`)
 
-`mhook_inject.cpp` implements `Mhook_Inject` (calling-process side): allocates a code+data blob in the target process, writes the `MhookInjectRemoteParams` struct, creates a remote thread running the bootstrap-thunk stub, and waits for completion.
+`mhook_inject.cpp` implements `Mhook_Inject` (calling-process side): allocates a code+data blob in the target process, writes the `MhookInjectRemoteParams` struct, and creates a remote thread running the bootstrap-thunk stub. In synchronous mode it then waits for the injection to finish; in async mode (`MHOOK_INJECT_FLAG_ASYNC`) it returns as soon as the thread is created and completion is reported out-of-band (see *Synchronous vs async completion* below).
 
 `inject_entry.c` is the code that runs inside the target process (`_internal_Execute`): loads the companion DLL via `LdrLoadDll`, resolves the user function, builds a `MHOOK_INJECT_CONTEXT`, and calls the function.
 
@@ -82,6 +82,11 @@ On `SetHook`, the library: suspends all other threads (via `NtGetNextThread` + `
 
 **`DELAY_UNTIL_INIT` flow:** when set, the injection function is deferred until the target has finished loader initialisation, by hooking the process **entry point** so the user function runs on the target's *main* thread (with Win32 available) just before the entry point executes. The delayed-vs-immediate decision is **caller-authoritative**: `Mhook_Inject` reads the target's `PEB_LDR_DATA.Initialized` *before* creating the injection thread and passes `MHOOK_REMOTE_FLAG_TARGET_UNINITIALIZED` in the remote params; `_internal_Execute` trusts that bit (falling back to its own `IsProcessInitialized()` only if the caller couldn't read the state). This indirection exists because **creating the injection thread itself runs loader init in the target** (see Invariants), so an in-target `IsProcessInitialized()` check at `_internal_Execute` time is unreliable.
 
+**Synchronous vs async completion:** the public flag `MHOOK_INJECT_FLAG_ASYNC` and the `Event` / `IoStatusBlock` / `ApcRoutine`+`ApcContext` fields of `MHOOK_INJECT_PARAMS` select how completion is reported:
+- *sync, no delay* — blocks until the injection fn returns; result is the thread exit status (read via `NtQueryInformationThread`).
+- *sync + `DELAY_UNTIL_INIT`* — blocks until the entry-point hook fires **and** the fn returns, via an internal auto-reset event signalled by `_internal_Execute`/`DoDelayedEntry`. **Caveat:** for a *suspended* target the hook can only fire once the main thread runs, so the caller must let it run (e.g. resume it on another thread) or the call waits out the 30 s timeout.
+- *async* — returns `S_OK` once the thread is created; completion is delivered to the caller-provided `Event` (duplicated into the target and signalled), `IoStatusBlock` (the target writes the final `NTSTATUS` across the process boundary via a duplicated caller-process handle), and/or a user APC (`NtQueueApcThread` to the calling thread — fires only when that thread is in an alertable wait). Delivering `IoStatusBlock`/APC duplicates handles to the calling process/thread into the target; acceptable under the `PROCESS_ALL_ACCESS` trust model (below).
+
 **Static vs Dynamic builds:**
 - Static (`mhook.lib` + `mhook_inject.lib`): the companion DLL must re-export `_internal_Execute` and link both libs.
 - Dynamic (`mhook.dll` + `mhook_inject.dll`): `mhook_inject.dll` is the companion; the user's DLL only needs to export the injection function and import from ntdll.
@@ -90,7 +95,7 @@ On `SetHook`, the library: suspends all other threads (via `NtGetNextThread` + `
 
 ### `MhookInjectRemoteParams` struct (`src/mhook-inject/inject_params.h`)
 
-This `#pragma pack(1)` struct is written into the remote process immediately after the bootstrap thunk. Its layout is fixed and verified with `static_assert` offset checks for both x64 (180 bytes) and x86 (80 bytes). Any change to field order must keep all offset assertions passing.
+This `#pragma pack(1)` struct is written into the remote process immediately after the bootstrap thunk. Its layout is fixed and verified with `static_assert` offset checks for both x64 (228 bytes) and x86 (104 bytes). Any change to field order must keep all offset assertions passing. The x64-only tail (`RtlAddFunctionTable` … `BootstrapThunkUC`) carries the dynamic-unwind registration; the common completion tail (`CompletionEvent`, `CallerProcess`, `CallerThread`, `ApcRoutine`, `ApcContext`, `IoStatusBlock`) carries the async/sync-event plumbing.
 
 ### `ntdll_extra_stub` (`src/ntdll_extra_stub/`)
 
@@ -119,6 +124,9 @@ The remote-thread bootstrap thunks (`src/mhook-inject/inject_bootstrap_thunk_x64
 
 ### Injecting a runnable thread initialises the target process
 Creating a thread with `NtCreateThreadEx` in a still-suspended target runs `ntdll!LdrInitializeThunk → LdrpInitializeProcess` as a side effect (whichever thread runs user code first wins the loader-init CAS), flipping `PEB_LDR_DATA.Initialized` to TRUE before `_internal_Execute` runs. This is why the `DELAY_UNTIL_INIT` decision is made caller-side (above). Background on the loader/thread mechanics is captured in `G:\projects-ext\claude-notes\ntapi\` (`process-initialization.md`, `NtCreateThreadEx.md`).
+
+### Remote-allocation cleanup is target-owned
+Once the remote thread is created, `_internal_Execute` frees the remote allocation itself via `FreeAllocationAndExitThread` (`NtFreeVirtualMemory` + `NtTerminateThread`) on **every** exit path, in both sync and async modes; the caller frees `remoteBase` only when `NtCreateThreadEx` *failed* (gated by `remoteBaseOwned`), to avoid a double-free. Because `NtTerminateThread` bypasses the bootstrap thunk's epilog (which would otherwise call `RtlDeleteFunctionTable`), on x64 `FreeAllocationAndExitThread` must deregister the unwind entry (`RtlDeleteFunctionTable(&pParams->BootstrapThunkRF)`) **before** freeing — otherwise a dynamic-function-table entry dangles into freed memory and corrupts later exception dispatch in the target.
 
 ### Thread suspend/resume contract (`mhook.cpp`)
 - `SuspendOtherThreads` walks threads with `NtGetNextThread`; the enumeration cursor must **never** be reset to `NULL` mid-walk (passing `NULL` restarts from the first thread → infinite re-suspension). Keep the last-returned handle as the cursor.
