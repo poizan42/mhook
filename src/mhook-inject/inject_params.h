@@ -55,7 +55,14 @@ typedef NTSTATUS (NTAPI *LdrLoadDllFn)(
 //     UserDataSize            @120  (8)           @ 68  (4)
 //     InjectStatus            @128  (4)           @ 72  (4)
 //     LdrCompanionStatus      @132  (4)           @ 76  (4)
-//     sizeof                  =136                = 80
+//   --- x64 only: bootstrap-thunk unwind tail @136..180 (see struct below) ---
+//     CompletionEvent         @180  (8)           @ 80  (4)
+//     CallerProcess           @188  (8)           @ 84  (4)
+//     CallerThread            @196  (8)           @ 88  (4)
+//     ApcRoutine              @204  (8)           @ 92  (4)
+//     ApcContext              @212  (8)           @ 96  (4)
+//     IoStatusBlock           @220  (8)           @100  (4)
+//     sizeof                  =228                =104
 // ---------------------------------------------------------------------------
 
 #pragma pack(push, 1)
@@ -92,8 +99,24 @@ typedef struct _MHOOK_INJECT_REMOTE_PARAMS {
     RUNTIME_FUNCTION  BootstrapThunkRF;        // @160 (12)
     UNWIND_INFO       BootstrapThunkUI;        // @172 (6)  prolog descriptor + UnwindCode[0]
     UNWIND_CODE       BootstrapThunkUC;        // @178 (2)  UnwindCode[1] (CountOfCodes == 2)
-    // sizeof = 180
+    // x64 prefix sizeof (without the common completion tail below) = 180
 #endif
+    // Completion plumbing (common to both arches; filled by Mhook_Inject).
+    //   CompletionEvent: signalled when the injection fn returns — either the
+    //     sync+delay internal event or the async user Event, duplicated into the
+    //     target.  NULL when no completion signal is needed.
+    //   CallerProcess:   handle to the calling process (for the IoStatusBlock
+    //     cross-process write).  NULL otherwise.
+    //   CallerThread:    handle to the calling thread (async APC).  Populated in
+    //     subtask 2; NULL otherwise.
+    //   ApcRoutine/ApcContext: caller-side APC routine + context.  Subtask 2.
+    //   IoStatusBlock:   caller-side IO_STATUS_BLOCK VA to receive the status.
+    HANDLE          CompletionEvent;      // @180 / @80
+    HANDLE          CallerProcess;        // @188 / @84
+    HANDLE          CallerThread;         // @196 / @88
+    PVOID           ApcRoutine;           // @204 / @92
+    PVOID           ApcContext;           // @212 / @96
+    PVOID           IoStatusBlock;        // @220 / @100
 } MHOOK_INJECT_REMOTE_PARAMS;
 #pragma pack(pop)
 
@@ -126,7 +149,13 @@ INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, BootstrapThunkBase)   
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, BootstrapThunkRF)           == 160, "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, BootstrapThunkUI)           == 172, "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, BootstrapThunkUC)           == 178, "layout");
-INJECT_STATIC_ASSERT(sizeof(MHOOK_INJECT_REMOTE_PARAMS)                          == 180, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CompletionEvent)            == 180, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CallerProcess)              == 188, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CallerThread)               == 196, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ApcRoutine)                 == 204, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ApcContext)                 == 212, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, IoStatusBlock)              == 220, "layout");
+INJECT_STATIC_ASSERT(sizeof(MHOOK_INJECT_REMOTE_PARAMS)                          == 228, "layout");
 INJECT_STATIC_ASSERT(sizeof(UNWIND_CODE)                                         ==   2, "unwind layout");
 INJECT_STATIC_ASSERT(sizeof(UNWIND_INFO)                                         ==   6, "unwind layout");
 INJECT_STATIC_ASSERT(sizeof(RUNTIME_FUNCTION)                                    ==  12, "unwind layout");
@@ -145,5 +174,11 @@ INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, UserData)           ==
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, UserDataSize)       == 68,  "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, InjectStatus)       == 72,  "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, LdrCompanionStatus) == 76,  "layout");
-INJECT_STATIC_ASSERT(sizeof(MHOOK_INJECT_REMOTE_PARAMS)                       == 80,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CompletionEvent)    == 80,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CallerProcess)      == 84,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CallerThread)       == 88,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ApcRoutine)         == 92,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ApcContext)         == 96,  "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, IoStatusBlock)      == 100, "layout");
+INJECT_STATIC_ASSERT(sizeof(MHOOK_INJECT_REMOTE_PARAMS)                       == 104, "layout");
 #endif

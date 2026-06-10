@@ -83,6 +83,71 @@ static CHAR              *g_DelayedFunctionName;  // heap copy for LdrGetProcedu
 static ULONG              g_DelayedFunctionRva;
 static EntryPointFn       g_TrueEntryPoint;       // set by Mhook_SetHook on EP hook
 
+// Completion plumbing carried across the delayed path (heap-stable globals,
+// since the remote allocation is freed once the bootstrap thread exits).
+static HANDLE             g_DelayedCompletionEvent; // signalled when the fn returns
+static HANDLE             g_DelayedCallerProcess;   // for the IoStatusBlock write
+static HANDLE             g_DelayedCallerThread;    // async APC (subtask 2)
+static PVOID              g_DelayedApcRoutine;      // async APC (subtask 2)
+static PVOID              g_DelayedApcContext;      // async APC (subtask 2)
+static PVOID              g_DelayedIoStatusBlock;   // caller-side IO_STATUS_BLOCK VA
+
+// ---------------------------------------------------------------------------
+// NotifyCompletion — report that the injection function has returned.
+//
+// Writes the final status into the caller's IoStatusBlock (cross-process),
+// signals the completion event, then closes the handles duplicated into this
+// process.  Each output is independent and skipped when its handle/pointer is
+// NULL.  (The APC delivery is added in subtask 2.)
+// ---------------------------------------------------------------------------
+
+static void NotifyCompletion(NTSTATUS status, HANDLE completionEvent,
+                             HANDLE callerProcess, PVOID ioStatusBlock)
+{
+    if (ioStatusBlock && callerProcess) {
+        IO_STATUS_BLOCK iosb;
+        iosb.Status      = status;
+        iosb.Information = 0;
+        NtWriteVirtualMemory(callerProcess, ioStatusBlock, &iosb, sizeof(iosb), NULL);
+    }
+    if (completionEvent)
+        NtSetEvent(completionEvent, NULL);
+
+    if (completionEvent) NtClose(completionEvent);
+    if (callerProcess)   NtClose(callerProcess);
+}
+
+// ---------------------------------------------------------------------------
+// FreeAllocationAndExitThread — release the remote bootstrap-thunk+params
+// allocation and exit this thread in one step.
+//
+// The target owns the allocation once the remote thread is created, so this is
+// called at the end of every _internal_Execute path.  We NtTerminateThread
+// instead of returning, which bypasses the bootstrap thunk's epilog — so on x64
+// we must first call RtlDeleteFunctionTable to remove the thunk's unwind
+// registration before the memory it points into is freed.
+// ---------------------------------------------------------------------------
+
+static DECLSPEC_NORETURN void FreeAllocationAndExitThread(
+    MHOOK_INJECT_REMOTE_PARAMS *pParams, NTSTATUS exitStatus)
+{
+#ifdef _M_X64
+    if (pParams->RtlDeleteFunctionTable) {
+        typedef BOOLEAN (NTAPI *RtlDeleteFunctionTableFn)(PVOID);
+        ((RtlDeleteFunctionTableFn)pParams->RtlDeleteFunctionTable)(
+            &pParams->BootstrapThunkRF);
+    }
+#endif
+    MEMORY_BASIC_INFORMATION mbi;
+    NtQueryVirtualMemory(NtCurrentProcess(), pParams,
+                         MemoryBasicInformation, &mbi, sizeof(mbi), NULL);
+    PVOID  base = mbi.AllocationBase;
+    SIZE_T zero = 0;
+    NtFreeVirtualMemory(NtCurrentProcess(), &base, &zero, MEM_RELEASE);
+    NtTerminateThread(NtCurrentThread(), exitStatus);
+    for (;;) {}  // unreachable; silences MSVC C4715
+}
+
 // ---------------------------------------------------------------------------
 // CallDelayedTargetFunction — load DLL if needed, resolve and call the
 // injection function.  Called from DoDelayedEntry and the post-hook
@@ -122,6 +187,13 @@ static void CallDelayedTargetFunction(void)
 
     if (pFunc)
         ((MhookInjectedFn)pFunc)(&g_DelayedCtx);
+
+    /* Report completion to the caller (sync-wait event or async notification). */
+    NotifyCompletion(STATUS_SUCCESS, g_DelayedCompletionEvent,
+                     g_DelayedCallerProcess, g_DelayedIoStatusBlock);
+    g_DelayedCompletionEvent = NULL;
+    g_DelayedCallerProcess   = NULL;
+    g_DelayedIoStatusBlock   = NULL;
 
     /* Free heap copies */
     if (g_DelayedCtx.UserData) {
@@ -205,8 +277,11 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
     }
 
     /* For non-delayed path: nothing to do if the function wasn't found */
-    if (!needDelay && !pTargetFunc)
-        goto done;
+    if (!needDelay && !pTargetFunc) {
+        NotifyCompletion(pParams->InjectStatus, pParams->CompletionEvent,
+                         pParams->CallerProcess, pParams->IoStatusBlock);
+        FreeAllocationAndExitThread(pParams, pParams->InjectStatus);
+    }
 
     // --- Resolve Mhook_SetHook / Mhook_Unhook ---
     MhookSetHookFn pSetHook = NULL;
@@ -244,6 +319,14 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
         g_DelayedUnhook      = pUnhook;
         g_DelayedTargetFunc  = pTargetFunc;   /* NULL for dynamic */
         g_DelayedFunctionRva = pParams->FunctionRva;
+
+        /* Completion plumbing for the later deferred call (CallDelayedTargetFunction). */
+        g_DelayedCompletionEvent = pParams->CompletionEvent;
+        g_DelayedCallerProcess   = pParams->CallerProcess;
+        g_DelayedIoStatusBlock   = pParams->IoStatusBlock;
+        g_DelayedCallerThread    = pParams->CallerThread;   /* subtask 2 (inert) */
+        g_DelayedApcRoutine      = pParams->ApcRoutine;     /* subtask 2 (inert) */
+        g_DelayedApcContext      = pParams->ApcContext;     /* subtask 2 (inert) */
 
         g_DelayedCtx.Size        = sizeof(g_DelayedCtx);
         g_DelayedCtx.SetHook     = pSetHook;
@@ -294,7 +377,12 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
             }
             pParams->InjectStatus = 3;
         } __except (EXCEPTION_EXECUTE_HANDLER) {
-            return (NTSTATUS)(0xDE000000 | (ULONG)pParams->InjectStatus);
+            /* Hook install faulted: the deferred call will never fire, so signal
+               completion with the error now or the caller would wait forever. */
+            NTSTATUS err = (NTSTATUS)(0xDE000000 | (ULONG)pParams->InjectStatus);
+            NotifyCompletion(err, pParams->CompletionEvent,
+                             pParams->CallerProcess, pParams->IoStatusBlock);
+            FreeAllocationAndExitThread(pParams, err);
         }
 #else
         {
@@ -324,8 +412,11 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
                 CallDelayedTargetFunction();
         }
 
-        pParams->InjectStatus = STATUS_SUCCESS;
-        return STATUS_SUCCESS;
+        /* The hook is installed (or the race-check already ran the fn and
+           signalled completion via globals).  The bootstrap thread's job is done;
+           free the allocation and exit.  The deferred call, when it fires, signals
+           completion using the saved globals — so do NOT notify here. */
+        FreeAllocationAndExitThread(pParams, STATUS_SUCCESS);
     }
 
     // --- Immediate (non-delayed) path ---
@@ -342,8 +433,10 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
         pParams->InjectStatus = STATUS_SUCCESS;   /* also set in-memory for cdb inspection */
     }
 
-done:
-    /* Return the status as the thread exit code so Mhook_Inject can read it
-       via NtQueryInformationThread after the process has exited. */
-    return pParams->InjectStatus;
+    /* Immediate path complete: report completion, then free the allocation and
+       exit.  The exit status becomes the thread ExitStatus (read by Mhook_Inject
+       via NtQueryInformationThread in synchronous mode). */
+    NotifyCompletion(pParams->InjectStatus, pParams->CompletionEvent,
+                     pParams->CallerProcess, pParams->IoStatusBlock);
+    FreeAllocationAndExitThread(pParams, pParams->InjectStatus);
 }

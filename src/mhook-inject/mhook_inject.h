@@ -14,6 +14,35 @@ extern "C" {
 #endif
 
 // ---------------------------------------------------------------------------
+// Minimal NT types used by the async-completion fields below.
+// Provided here under guards so this header is self-contained — callers do not
+// need <winternl.h>.  The guard names match src/nt_defs.h so the library's own
+// translation units (which include nt_defs.h) do not get a double definition.
+// ---------------------------------------------------------------------------
+
+#ifndef __NTSTATUS_DEFINED
+#define __NTSTATUS_DEFINED
+typedef LONG NTSTATUS;
+typedef NTSTATUS *PNTSTATUS;
+#endif
+
+#ifndef _IO_STATUS_BLOCK_DEFINED
+#define _IO_STATUS_BLOCK_DEFINED
+typedef struct _IO_STATUS_BLOCK {
+    union { NTSTATUS Status; PVOID Pointer; };
+    ULONG_PTR Information;
+} IO_STATUS_BLOCK, *PIO_STATUS_BLOCK;
+#endif
+
+#ifndef _IO_APC_ROUTINE_DEFINED
+#define _IO_APC_ROUTINE_DEFINED
+typedef VOID (NTAPI *PIO_APC_ROUTINE)(
+    PVOID            ApcContext,
+    PIO_STATUS_BLOCK IoStatusBlock,
+    ULONG            Reserved);
+#endif
+
+// ---------------------------------------------------------------------------
 // Flags for MHOOK_INJECT_PARAMS.Flags
 // ---------------------------------------------------------------------------
 
@@ -24,6 +53,13 @@ extern "C" {
 // injects the thread, the function is called immediately.
 // For dynamic builds the target DLL is not loaded until that moment either.
 #define MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT  0x00000001u
+
+// Return immediately after creating the remote thread; the injection function
+// runs in the background.  Completion is reported via the Event / IoStatusBlock /
+// ApcRoutine fields below (all optional; all NULL = pure fire-and-forget).
+// Without this flag Mhook_Inject blocks until the injection function has returned
+// (now true even when combined with MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT).
+#define MHOOK_INJECT_FLAG_ASYNC             0x00000002u
 
 // ---------------------------------------------------------------------------
 // Failure HRESULTs returned by Mhook_Inject
@@ -97,6 +133,36 @@ typedef struct _MHOOK_INJECT_PARAMS {
     // function via MhookInjectContext.UserData.
     PVOID  UserData;
     SIZE_T UserDataSize;
+
+    // -----------------------------------------------------------------------
+    // Async completion — only meaningful when MHOOK_INJECT_FLAG_ASYNC is set.
+    // All fields are optional; set unused ones to NULL.  When all are NULL and
+    // ASYNC is set, the call is pure fire-and-forget.
+    // -----------------------------------------------------------------------
+
+    // Optional.  Event handle set to the signaled state after the injection
+    // function returns.  Duplicated into the target internally; the caller keeps
+    // ownership of the original.  NULL if unused.
+    HANDLE             Event;
+
+    // Optional.  APC routine queued to the CALLING thread after the injection
+    // function returns.  The calling thread must enter an alertable wait (e.g.
+    // SleepEx(.,TRUE)) for the APC to run, as with ReadFileEx.  NULL if unused.
+    // NOTE: reserved — not yet honored; will be implemented in a later version.
+    PIO_APC_ROUTINE    ApcRoutine;
+
+    // Optional.  Context value passed verbatim to ApcRoutine.  Ignored when
+    // ApcRoutine is NULL.
+    // NOTE: reserved — see ApcRoutine.
+    PVOID              ApcContext;
+
+    // Optional.  Pointer to an IO_STATUS_BLOCK in the CALLING process.  Its
+    // Status member receives the final NTSTATUS of the injection function; it is
+    // set to STATUS_PENDING before Mhook_Inject returns.  Because the target
+    // writes it across the process boundary, delivering it grants the target a
+    // write handle to the calling process (acceptable: Mhook_Inject already
+    // requires PROCESS_ALL_ACCESS on the target).  NULL if unused.
+    PIO_STATUS_BLOCK   IoStatusBlock;
 
 } MHOOK_INJECT_PARAMS;
 

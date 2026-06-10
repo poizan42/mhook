@@ -519,10 +519,19 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     if (useFnPtr == useName)
         return MHOOK_INJECT_E_PARAMS;
 
+    BOOLEAN isAsync = (params->Flags & MHOOK_INJECT_FLAG_ASYNC) != 0;
+    // Synchronous + delay needs an internal kernel event: after the bootstrap
+    // thread exits (hook installed), we wait on it until the entry-point hook
+    // fires and the injection function returns.
+    BOOLEAN needsSyncEvent = !isAsync
+                             && (params->Flags & MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT) != 0;
+
     HRESULT hr = E_FAIL;
     NTSTATUS st;
-    PVOID  remoteBase = NULL;
-    HANDLE hThread    = NULL;
+    PVOID   remoteBase      = NULL;
+    BOOLEAN remoteBaseOwned = FALSE;  // TRUE once the remote thread owns the free
+    HANDLE  hThread         = NULL;
+    HANDLE  hSyncEvent      = NULL;   // calling-side handle (sync+delay internal event)
 
     // All path strings are heap-allocated; freed in cleanup.
     WCHAR *selfPath      = NULL;  // full path of module containing Mhook_Inject
@@ -762,6 +771,48 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
         rp.FunctionName.MaximumLength = (USHORT)funcNameBytes;
     }
 
+    // -----------------------------------------------------------------------
+    // Completion plumbing — set the rp fields before the params block is written.
+    //   sync + delay : internal auto-reset event, signalled when the hook fires.
+    //   async        : the user's Event (duplicated in) and/or an IoStatusBlock
+    //                  written across the process boundary on completion.
+    // (APC delivery — CallerThread/ApcRoutine/ApcContext — arrives in subtask 2.)
+    // -----------------------------------------------------------------------
+    if (needsSyncEvent) {
+        HANDLE hRemoteEvent = NULL;
+        st = NtCreateEvent(&hSyncEvent, EVENT_ALL_ACCESS, NULL,
+                           SynchronizationEvent, FALSE);
+        if (NT_SUCCESS(st))
+            st = NtDuplicateObject(NtCurrentProcess(), hSyncEvent,
+                                   params->TargetProcess, &hRemoteEvent,
+                                   EVENT_ALL_ACCESS, 0, 0);
+        if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; }
+        rp.CompletionEvent = hRemoteEvent;
+    } else if (isAsync) {
+        if (params->Event) {
+            HANDLE hRemoteEvent = NULL;
+            st = NtDuplicateObject(NtCurrentProcess(), params->Event,
+                                   params->TargetProcess, &hRemoteEvent,
+                                   EVENT_ALL_ACCESS, 0, 0);
+            if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; }
+            rp.CompletionEvent = hRemoteEvent;
+        }
+        if (params->IoStatusBlock) {
+            // The target writes the final status across the boundary, so give it
+            // a handle to THIS process with write access.
+            HANDLE hRemoteSelf = NULL;
+            st = NtDuplicateObject(NtCurrentProcess(), NtCurrentProcess(),
+                                   params->TargetProcess, &hRemoteSelf,
+                                   PROCESS_VM_OPERATION | PROCESS_VM_WRITE, 0, 0);
+            if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; }
+            rp.CallerProcess = hRemoteSelf;
+            rp.IoStatusBlock = params->IoStatusBlock;
+            // NT idiom: pending until the target overwrites it on completion.
+            params->IoStatusBlock->Status      = (NTSTATUS)0x00000103L; // STATUS_PENDING
+            params->IoStatusBlock->Information  = 0;
+        }
+    }
+
 #define WRITE(dst, src, len) \
     do { st = NtWriteVirtualMemory(params->TargetProcess, dst, (PVOID)(src), len, NULL); \
          if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; } } while(0)
@@ -780,7 +831,7 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
 #undef WRITE
 
     // -----------------------------------------------------------------------
-    // Step 9: Create remote thread and wait
+    // Step 9: Create remote thread
     // -----------------------------------------------------------------------
     st = NtCreateThreadEx(&hThread, THREAD_ALL_ACCESS, NULL,
                            params->TargetProcess,
@@ -789,31 +840,55 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
                            0, 0, 0, 0, NULL);
     if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; }
 
-    LARGE_INTEGER timeout;
-    timeout.QuadPart = -300000000LL;  // 30 s in 100-ns units
-    st = NtWaitForSingleObject(hThread, FALSE, &timeout);
-    if (st == STATUS_TIMEOUT) { hr = MHOOK_INJECT_E_TIMEOUT; goto cleanup; }
-    // The remote thread has finished.  Read the injection result from the thread
-    // exit code rather than remote process memory: the kernel keeps the thread
-    // object alive while hThread is open, so this works even if the target process
-    // has already exited and freed its address space.
-    // _internal_Execute returns STATUS_SUCCESS when the target function was found
-    // and called, STATUS_NOT_FOUND otherwise; that value propagates via rax/eax
-    // through the bootstrap-thunk ret and becomes the thread's ExitStatus.
+    // The remote thread now owns the allocation: _internal_Execute releases it
+    // via FreeAllocationAndExitThread before terminating.  The caller must not
+    // free remoteBase (doing so would race the running bootstrap thunk).
+    remoteBaseOwned = TRUE;
+
+    if (isAsync) {
+        // Return immediately; completion is delivered to the target-bound Event
+        // and/or IoStatusBlock when the injection function returns.
+        hr = S_OK;
+        goto cleanup;
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 10: Wait for completion (synchronous modes)
+    // -----------------------------------------------------------------------
     {
+        LARGE_INTEGER timeout;
+        timeout.QuadPart = -300000000LL;  // 30 s in 100-ns units
+
+        // Wait for the bootstrap thread.  Its exit status is the NTSTATUS set by
+        // FreeAllocationAndExitThread (kept alive by the kernel thread object
+        // while hThread is open, even if the target has since exited).
+        st = NtWaitForSingleObject(hThread, FALSE, &timeout);
+        if (st == STATUS_TIMEOUT) { hr = MHOOK_INJECT_E_TIMEOUT; goto cleanup; }
+
         THREAD_BASIC_INFORMATION tbi = {};
         NTSTATUS injectStatus = STATUS_UNSUCCESSFUL;
         if (NT_SUCCESS(NtQueryInformationThread(hThread, ThreadBasicInformation,
-                                                &tbi, sizeof(tbi), NULL))) {
+                                                &tbi, sizeof(tbi), NULL)))
             injectStatus = tbi.ExitStatus;
+        if (!NT_SUCCESS(injectStatus)) { hr = HrFromNt(injectStatus); goto cleanup; }
+
+        if (needsSyncEvent) {
+            // Delay path: the bootstrap thread installed the entry-point hook and
+            // exited; now wait for the hook to fire and the injection fn to return.
+            st = NtWaitForSingleObject(hSyncEvent, FALSE, &timeout);
+            hr = (st == STATUS_TIMEOUT) ? MHOOK_INJECT_E_TIMEOUT : S_OK;
+        } else {
+            hr = S_OK;
         }
-        hr = NT_SUCCESS(injectStatus) ? S_OK : HrFromNt(injectStatus);
     }
     } // end architecture block
 
 cleanup:
     if (hThread)    NtClose(hThread);
-    if (remoteBase) {
+    if (hSyncEvent) NtClose(hSyncEvent);
+    // remoteBase is freed by the remote thread once created; free here only if
+    // thread creation failed (remoteBaseOwned == FALSE) to avoid a double-free.
+    if (!remoteBaseOwned && remoteBase) {
         SIZE_T zero = 0;
         NtFreeVirtualMemory(params->TargetProcess, &remoteBase, &zero, MEM_RELEASE);
     }

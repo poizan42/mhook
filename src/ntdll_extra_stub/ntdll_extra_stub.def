@@ -9,6 +9,10 @@ EXPORTS
     NtReadFile
     NtQueryInformationProcess
     NtQueryObject
+    NtTerminateThread
+    NtCreateEvent
+    NtSetEvent
+    NtDuplicateObject
     LdrLoadDll
     LdrGetProcedureAddress
     _snprintf

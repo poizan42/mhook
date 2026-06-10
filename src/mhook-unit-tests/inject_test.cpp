@@ -244,11 +244,25 @@ static bool RunDelayedInjectTest(const wchar_t *dllPath,
     params.FunctionName  = functionName;
     params.Flags         = MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT;
 
-    HRESULT hr = Mhook_Inject(&params);
-    // Start the process: it will initialize, fire the entry-point hook, call
-    // the injection function, and write the marker.
-    ResumeThread(pi.hThread);
+    // Synchronous + DELAY_UNTIL_INIT now BLOCKS until the injection function has
+    // returned.  For a suspended target the entry-point hook fires only once the
+    // main thread runs, so resume it on a helper thread — after a delay long
+    // enough for the injection thread to install the hook first (it parks on the
+    // completion event meanwhile).
+    struct ResumeCtx { HANDLE th; };
+    ResumeCtx rc = { pi.hThread };
+    struct Resumer {
+        static DWORD WINAPI Run(LPVOID p) {
+            Sleep(500);
+            ResumeThread(((ResumeCtx *)p)->th);
+            return 0;
+        }
+    };
+    HANDLE hResume = CreateThread(NULL, 0, Resumer::Run, &rc, 0, NULL);
 
+    HRESULT hr = Mhook_Inject(&params);
+
+    if (hResume) { WaitForSingleObject(hResume, 5000); CloseHandle(hResume); }
     CloseHandle(hWritePipe);
 
     std::string output;
@@ -403,4 +417,229 @@ TEST(MhookInjectTest, DelayedExecutionWithWin32RunningProcess)
     EXPECT_TRUE(output.find(kMarker) != std::string::npos)
         << "Expected marker '" << kMarker << "' not found."
         << " Output: [" << output << "]";
+}
+
+// ===========================================================================
+// Subtask 1: synchronous DELAY blocking + async completion (Event / IoStatusBlock)
+// ===========================================================================
+
+namespace {
+
+// Drain a pipe to EOF (all write ends closed) or until timeoutMs elapses.
+std::string DrainPipe(HANDLE hReadPipe, DWORD timeoutMs)
+{
+    std::string output;
+    struct RS { HANDLE pipe; std::string *out; } rs = { hReadPipe, &output };
+    struct RT {
+        static DWORD WINAPI Run(LPVOID p) {
+            RS *rs = (RS *)p; char tmp[1024]; DWORD got;
+            while (ReadFile(rs->pipe, tmp, sizeof(tmp), &got, NULL) && got > 0)
+                rs->out->append(tmp, got);
+            return 0;
+        }
+    };
+    HANDLE h = CreateThread(NULL, 0, RT::Run, &rs, 0, NULL);
+    if (h) { WaitForSingleObject(h, timeoutMs); CloseHandle(h); }
+    return output;
+}
+
+// Create cmd.exe suspended with stdout/stderr redirected to a fresh pipe.
+bool CreateSuspendedCmd(PROCESS_INFORMATION *pi, HANDLE *hReadPipe, HANDLE *hWritePipe)
+{
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+    if (!CreatePipe(hReadPipe, hWritePipe, &sa, 0)) return false;
+
+    HANDLE hNullIn = CreateFileW(L"nul", GENERIC_READ,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                 &sa, OPEN_EXISTING, 0, NULL);
+    wchar_t cmdLine[] = L"cmd.exe";
+    STARTUPINFOW si = { sizeof(si) };
+    si.dwFlags    = STARTF_USESTDHANDLES;
+    si.hStdInput  = hNullIn;
+    si.hStdOutput = *hWritePipe;
+    si.hStdError  = *hWritePipe;
+
+    BOOL created = CreateProcessW(NULL, cmdLine, NULL, NULL, TRUE,
+                                  CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                                  NULL, NULL, &si, pi);
+    CloseHandle(hNullIn);
+    if (!created) {
+        CloseHandle(*hReadPipe); CloseHandle(*hWritePipe);
+        *hReadPipe = *hWritePipe = NULL;
+        return false;
+    }
+    return true;
+}
+
+// Resume the main thread after a delay long enough for the injection thread to
+// install the entry-point hook (the delayed path's hook fires on resume).
+DWORD WINAPI DelayedResumeProc(LPVOID p)
+{
+    Sleep(500);
+    ResumeThread((HANDLE)p);
+    return 0;
+}
+
+} // namespace
+
+// Synchronous + DELAY_UNTIL_INIT must block until the injection function has run.
+// Proven by peeking the pipe the instant Mhook_Inject returns: the marker is
+// already there (the fn wrote it before completion was signalled).
+TEST(MhookInjectTest, SyncDelayBlocksUntilHookFires)
+{
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedCmd(&pi, &hRead, &hWrite))
+        GTEST_SKIP() << "Could not create cmd.exe (" << GetLastError() << ")";
+
+    MHOOK_INJECT_PARAMS params = {};
+    params.Size          = sizeof(params);
+    params.TargetProcess = pi.hProcess;
+    params.DllPath       = L"mhook_inject_test_companion.dll";
+    params.FunctionName  = "Inject_WriteMarkerAndResume";
+    params.Flags         = MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT;
+
+    HANDLE hResume = CreateThread(NULL, 0, DelayedResumeProc, pi.hThread, 0, NULL);
+    HRESULT hr = Mhook_Inject(&params);
+    if (hResume) { WaitForSingleObject(hResume, 5000); CloseHandle(hResume); }
+
+    // The injection fn writes the marker before completion is signalled, so the
+    // instant Mhook_Inject returns the marker must already be in the pipe.
+    bool markerBeforeDrain = false;
+    if (SUCCEEDED(hr)) {
+        char peek[256]; DWORD got = 0, avail = 0;
+        if (PeekNamedPipe(hRead, peek, sizeof(peek) - 1, &got, &avail, NULL) && got > 0)
+            markerBeforeDrain =
+                (std::string(peek, got).find("MHOOK_INJECT_OK") != std::string::npos);
+    }
+
+    CloseHandle(hWrite);
+    std::string output = DrainPipe(hRead, 15000);
+
+    WaitForSingleObject(pi.hProcess, 5000);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead);
+
+    EXPECT_HRESULT_SUCCEEDED(hr) << "sync+delay inject failed: 0x" << std::hex << hr;
+    EXPECT_TRUE(markerBeforeDrain)
+        << "marker not present when Mhook_Inject returned — it did not block."
+        << " Output: [" << output << "]";
+}
+
+// ASYNC, all completion outputs NULL: returns immediately; the fn still runs
+// (immediate path) on the injection thread and writes the marker.
+TEST(MhookInjectTest, AsyncFireAndForget)
+{
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedCmd(&pi, &hRead, &hWrite))
+        GTEST_SKIP() << "Could not create cmd.exe (" << GetLastError() << ")";
+
+    MHOOK_INJECT_PARAMS params = {};
+    params.Size          = sizeof(params);
+    params.TargetProcess = pi.hProcess;
+    params.DllPath       = L"mhook_inject_test_companion.dll";
+    params.FunctionName  = "Inject_WriteMarkerAndResume";
+    params.Flags         = MHOOK_INJECT_FLAG_ASYNC;
+
+    HRESULT hr = Mhook_Inject(&params);
+
+    // Fire-and-forget has no completion signal — poll the pipe until the
+    // background injection thread has written the marker.  cmd.exe stays
+    // suspended (the injection thread writes via its inherited stdout handle),
+    // so this does not depend on the target running or exiting.
+    bool markerFound = false;
+    for (int i = 0; i < 200 && !markerFound; ++i) {
+        char peek[512]; DWORD got = 0, avail = 0;
+        if (PeekNamedPipe(hRead, peek, sizeof(peek) - 1, &got, &avail, NULL) && got > 0)
+            markerFound =
+                (std::string(peek, got).find("MHOOK_INJECT_OK") != std::string::npos);
+        if (!markerFound) Sleep(50);
+    }
+
+    CloseHandle(hWrite);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead);
+
+    EXPECT_HRESULT_SUCCEEDED(hr) << "async fire-and-forget failed: 0x" << std::hex << hr;
+    EXPECT_TRUE(markerFound) << "background injection did not write the marker";
+}
+
+// ASYNC + DELAY_UNTIL_INIT + Event: Mhook_Inject returns immediately; the event
+// is signalled once the (delayed) injection fn returns.
+TEST(MhookInjectTest, AsyncWithEvent)
+{
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedCmd(&pi, &hRead, &hWrite))
+        GTEST_SKIP() << "Could not create cmd.exe (" << GetLastError() << ")";
+
+    HANDLE hEvent = CreateEventW(NULL, FALSE /*auto-reset*/, FALSE, NULL);
+    ASSERT_NE(hEvent, (HANDLE)NULL);
+
+    MHOOK_INJECT_PARAMS params = {};
+    params.Size          = sizeof(params);
+    params.TargetProcess = pi.hProcess;
+    params.DllPath       = L"mhook_inject_test_companion.dll";
+    params.FunctionName  = "Inject_WriteMarkerAndResume";
+    params.Flags         = MHOOK_INJECT_FLAG_ASYNC | MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT;
+    params.Event         = hEvent;
+
+    HANDLE hResume = CreateThread(NULL, 0, DelayedResumeProc, pi.hThread, 0, NULL);
+    HRESULT hr = Mhook_Inject(&params);          // returns immediately (async)
+    DWORD waited = WaitForSingleObject(hEvent, 15000);
+
+    if (hResume) { WaitForSingleObject(hResume, 5000); CloseHandle(hResume); }
+    CloseHandle(hWrite);
+    std::string output = DrainPipe(hRead, 15000);
+
+    WaitForSingleObject(pi.hProcess, 5000);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead); CloseHandle(hEvent);
+
+    EXPECT_HRESULT_SUCCEEDED(hr) << "async inject failed: 0x" << std::hex << hr;
+    EXPECT_EQ(waited, (DWORD)WAIT_OBJECT_0) << "completion event was not signalled";
+    EXPECT_TRUE(output.find("MHOOK_INJECT_OK") != std::string::npos)
+        << "marker not found. Output: [" << output << "]";
+}
+
+// ASYNC + Event + IoStatusBlock (immediate path): the target writes the result
+// NTSTATUS back into the caller's IoStatusBlock across the process boundary.
+TEST(MhookInjectTest, AsyncIoStatusBlockGetsStatus)
+{
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedCmd(&pi, &hRead, &hWrite))
+        GTEST_SKIP() << "Could not create cmd.exe (" << GetLastError() << ")";
+
+    HANDLE hEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+    ASSERT_NE(hEvent, (HANDLE)NULL);
+
+    IO_STATUS_BLOCK iosb;
+    iosb.Status      = (NTSTATUS)0x7fffffffL;  // sentinel: neither PENDING nor SUCCESS
+    iosb.Information = 0;
+
+    MHOOK_INJECT_PARAMS params = {};
+    params.Size          = sizeof(params);
+    params.TargetProcess = pi.hProcess;
+    params.DllPath       = L"mhook_inject_test_companion.dll";
+    params.FunctionName  = "Inject_WriteMarkerAndResume";
+    params.Flags         = MHOOK_INJECT_FLAG_ASYNC;   // immediate path: fn runs on the injection thread
+    params.Event         = hEvent;
+    params.IoStatusBlock = &iosb;
+
+    HRESULT hr = Mhook_Inject(&params);
+    DWORD waited = WaitForSingleObject(hEvent, 15000);
+    NTSTATUS finalStatus = iosb.Status;
+
+    ResumeThread(pi.hThread);
+    CloseHandle(hWrite);
+    std::string output = DrainPipe(hRead, 15000);
+
+    WaitForSingleObject(pi.hProcess, 5000);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead); CloseHandle(hEvent);
+
+    EXPECT_HRESULT_SUCCEEDED(hr) << "async inject failed: 0x" << std::hex << hr;
+    EXPECT_EQ(waited, (DWORD)WAIT_OBJECT_0) << "completion event was not signalled";
+    EXPECT_EQ(finalStatus, (NTSTATUS)0)
+        << "IoStatusBlock.Status not updated to STATUS_SUCCESS; got 0x" << std::hex << finalStatus;
+    EXPECT_TRUE(output.find("MHOOK_INJECT_OK") != std::string::npos)
+        << "marker not found. Output: [" << output << "]";
 }

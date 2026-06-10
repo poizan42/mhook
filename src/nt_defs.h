@@ -439,6 +439,15 @@ typedef enum _NT_MEMORYINFOCLASS {
     MemoryMappedFileInformation     = 2,
 } NT_MEMORYINFOCLASS;
 
+typedef enum _EVENT_TYPE {
+    NotificationEvent    = 0,   // manual-reset: stays signalled until reset
+    SynchronizationEvent = 1,   // auto-reset: one wait releases, then resets
+} EVENT_TYPE;
+
+#ifndef EVENT_ALL_ACCESS
+#define EVENT_ALL_ACCESS 0x1F0003L
+#endif
+
 // ---------------------------------------------------------------------------
 // Thread / process information structures
 // ---------------------------------------------------------------------------
@@ -475,8 +484,13 @@ typedef struct _DESCRIPTOR_TABLE_ENTRY {
 
 // ---------------------------------------------------------------------------
 // I/O types  (not in winnt.h; normally from ntdef.h / winternl.h)
+//
+// Guard names match those used in mhook_inject.h so the two headers can both
+// define these types without a redefinition conflict (whichever is seen first).
 // ---------------------------------------------------------------------------
 
+#ifndef _IO_STATUS_BLOCK_DEFINED
+#define _IO_STATUS_BLOCK_DEFINED
 typedef struct _IO_STATUS_BLOCK {
     union {
         NTSTATUS    Status;
@@ -484,11 +498,15 @@ typedef struct _IO_STATUS_BLOCK {
     };
     ULONG_PTR   Information;
 } IO_STATUS_BLOCK, *PIO_STATUS_BLOCK;
+#endif
 
+#ifndef _IO_APC_ROUTINE_DEFINED
+#define _IO_APC_ROUTINE_DEFINED
 typedef VOID (NTAPI *PIO_APC_ROUTINE)(
     PVOID           ApcContext,
     PIO_STATUS_BLOCK IoStatusBlock,
     ULONG           Reserved);
+#endif
 
 // ---------------------------------------------------------------------------
 // RTL_USER_PROCESS_PARAMETERS — minimal layout to reach StandardOutput.
@@ -628,6 +646,32 @@ NTSTATUS NTAPI NtDelayExecution(
 NTSTATUS NTAPI NtTerminateProcess(
     HANDLE  ProcessHandle,
     NTSTATUS ExitStatus);
+
+NTSTATUS NTAPI NtTerminateThread(
+    HANDLE   ThreadHandle,
+    NTSTATUS ExitStatus);
+
+// Event objects
+NTSTATUS NTAPI NtCreateEvent(
+    PHANDLE             EventHandle,
+    ACCESS_MASK         DesiredAccess,
+    POBJECT_ATTRIBUTES  ObjectAttributes,
+    EVENT_TYPE          EventType,
+    BOOLEAN             InitialState);
+
+NTSTATUS NTAPI NtSetEvent(
+    HANDLE  EventHandle,
+    PLONG   PreviousState);
+
+// Duplicate a handle from one process into another.
+NTSTATUS NTAPI NtDuplicateObject(
+    HANDLE      SourceProcessHandle,
+    HANDLE      SourceHandle,
+    HANDLE      TargetProcessHandle,
+    PHANDLE     TargetHandle,
+    ACCESS_MASK DesiredAccess,
+    ULONG       HandleAttributes,
+    ULONG       Options);
 
 // I/O
 NTSTATUS NTAPI NtWriteFile(
