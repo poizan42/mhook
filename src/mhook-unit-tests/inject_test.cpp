@@ -170,7 +170,7 @@ TEST(MhookInjectTest, RejectsLimitedAccessHandle)
 
     HRESULT hr = Mhook_Inject(&params);
 
-    EXPECT_TRUE(FAILED(hr))
+    EXPECT_EQ(hr, MHOOK_INJECT_E_ACCESS)
         << "Mhook_Inject must reject a target handle without PROCESS_ALL_ACCESS;"
         << " hr=0x" << std::hex << hr;
 

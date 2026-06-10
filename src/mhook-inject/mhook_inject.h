@@ -26,6 +26,22 @@ extern "C" {
 #define MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT  0x00000001u
 
 // ---------------------------------------------------------------------------
+// Failure HRESULTs returned by Mhook_Inject
+//
+// These set the Customer (C) bit (0x20000000) together with the severity bit, so
+// they belong to the mhook library as a whole rather than to a Microsoft facility
+// (FACILITY_*).  Other failures are propagated as-is (e.g. an NTSTATUS mapped to
+// an HRESULT), so always test with FAILED(hr) and only compare against these for
+// specific handling.
+// ---------------------------------------------------------------------------
+
+#define MHOOK_INJECT_E_PARAMS    ((HRESULT)0xA0000001L)  // bad/incompatible params
+#define MHOOK_INJECT_E_NO_NTDLL  ((HRESULT)0xA0000002L)  // ntdll not found in target
+#define MHOOK_INJECT_E_NO_EXEC   ((HRESULT)0xA0000003L)  // _internal_Execute not found in companion DLL
+#define MHOOK_INJECT_E_TIMEOUT   ((HRESULT)0xA0000004L)  // remote thread timed out
+#define MHOOK_INJECT_E_ACCESS    ((HRESULT)0xA0000005L)  // target handle lacks PROCESS_ALL_ACCESS
+
+// ---------------------------------------------------------------------------
 // MHOOK_INJECT_PARAMS — input to Mhook_Inject (calling process)
 // ---------------------------------------------------------------------------
 

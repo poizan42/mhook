@@ -25,13 +25,9 @@ extern "C" char InjectShellcodeEnd[];
 
 // ---------------------------------------------------------------------------
 // HRESULT helpers
+//
+// The MHOOK_INJECT_E_* failure codes are public (declared in mhook_inject.h).
 // ---------------------------------------------------------------------------
-
-#define MHOOK_INJECT_E_PARAMS    ((HRESULT)0x80040001L)  // bad/incompatible params
-#define MHOOK_INJECT_E_NO_NTDLL  ((HRESULT)0x80040002L)  // ntdll not found in target
-#define MHOOK_INJECT_E_NO_EXEC   ((HRESULT)0x80040003L)  // _internal_Execute not in DLL
-#define MHOOK_INJECT_E_TIMEOUT   ((HRESULT)0x80040004L)  // remote thread timed out
-#define MHOOK_INJECT_E_ACCESS    ((HRESULT)0x80040005L)  // target handle lacks PROCESS_ALL_ACCESS
 
 static HRESULT HrFromNt(NTSTATUS s)
 {
