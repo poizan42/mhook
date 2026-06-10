@@ -498,8 +498,10 @@ static VOID TrampolineFree(MHOOKS_TRAMPOLINE* pTrampoline, BOOL bNeverUsed) {
 // Internal function:
 //
 // Suspend a given thread and try to make sure that its instruction
-// pointer is not in the given range.  Takes ownership of hThread on
-// success; closes it and returns FALSE on failure.
+// pointer is not in the given range.  Does NOT close hThread in any case —
+// the caller owns the handle's lifetime (it is reused as the NtGetNextThread
+// enumeration cursor and, on success, stored for ResumeOtherThreads).
+// Returns TRUE with the thread left suspended, or FALSE with it left resumed.
 //=========================================================================
 static BOOL SuspendOneThread(HANDLE hThread, PBYTE pbCode, DWORD cbBytes) {
 	ULONG dwSuspendCount = 0;
@@ -527,10 +529,9 @@ static BOOL SuspendOneThread(HANDLE hThread, PBYTE pbCode, DWORD cbBytes) {
 					NtSuspendThread(hThread, &dwSuspendCount);
 					nTries++;
 				} else {
-					// gave it all we could
+					// gave it all we could — leave it resumed; caller owns the handle
 					ODPRINTF(("mhooks: SuspendOneThread: IP collision unresolvable, giving up on this thread"));
 					NtResumeThread(hThread, &dwSuspendCount);
-					NtClose(hThread);
 					return FALSE;
 				}
 			} else {
@@ -540,8 +541,7 @@ static BOOL SuspendOneThread(HANDLE hThread, PBYTE pbCode, DWORD cbBytes) {
 			}
 		}
 	}
-	// couldn't suspend
-	NtClose(hThread);
+	// couldn't suspend — caller owns the handle
 	return FALSE;
 }
 
@@ -592,8 +592,14 @@ static BOOL SuspendOtherThreads(PBYTE pbCode, DWORD cbBytes) {
 	// Walk all threads in this process using NtGetNextThread.
 	// NtGetNextThread returns a new handle to the next thread; we close the
 	// previous handle after each successful call.
+	// hCur is the enumeration cursor: the most recently returned handle, which
+	// MUST be passed back to NtGetNextThread to advance to the next thread.  It
+	// is never reset to NULL mid-walk — doing so would make NtGetNextThread
+	// restart from the first thread and re-suspend it forever.  bCurKept tracks
+	// whether hCur was handed to the resume list (so we don't close it here).
 	HANDLE hCur = NULL;
 	HANDLE hNext = NULL;
+	BOOL bCurKept = FALSE;
 	ULONG nAllocated = 0;
 	BOOL bFailed = FALSE;
 
@@ -602,12 +608,15 @@ static BOOL SuspendOtherThreads(PBYTE pbCode, DWORD cbBytes) {
 	        THREAD_SET_CONTEXT   | THREAD_QUERY_INFORMATION,
 	        0, 0, &hNext)))
 	{
-		// close the handle from the previous iteration (not needed after getting hNext)
-		if (hCur != NULL)
+		// The previous cursor handle has served its purpose (advancing the walk).
+		// Close it unless it was stored for ResumeOtherThreads.
+		if (hCur != NULL && !bCurKept)
 			NtClose(hCur);
 		hCur = hNext;
+		bCurKept = FALSE;
 
-		// skip ourselves
+		// skip ourselves — but keep hCur as the cursor so the next
+		// NtGetNextThread advances past us rather than restarting the walk
 		RtlZeroMemory(&tbi, sizeof(tbi));
 		NtQueryInformationThread(hCur, ThreadBasicInformation, &tbi, sizeof(tbi), NULL);
 		if (tbi.ClientId.UniqueThread == NtCurrentClientId().UniqueThread)
@@ -630,20 +639,23 @@ static BOOL SuspendOtherThreads(PBYTE pbCode, DWORD cbBytes) {
 			nAllocated = nNew;
 		}
 
-		// attempt to suspend; SuspendOneThread takes ownership of hCur on success
+		// Attempt to suspend.  SuspendOneThread no longer closes the handle, so
+		// hCur stays valid as the cursor.  On success we also store it for resume
+		// and mark bCurKept, so the next iteration's top-of-loop cleanup leaves it
+		// alone (it is still passed to NtGetNextThread to advance, then owned by
+		// ResumeOtherThreads).  On failure hCur is closed at the top of the next
+		// iteration (or after the loop).
 		if (SuspendOneThread(hCur, pbCode, cbBytes)) {
 			ODPRINTF(("mhooks: SuspendOtherThreads: suspended thread %p", tbi.ClientId.UniqueThread));
 			g_hThreadHandles[g_nThreadHandles++] = hCur;
-			hCur = NULL; // ownership transferred; don't close on next iteration
+			bCurKept = TRUE;
 		} else {
 			ODPRINTF(("mhooks: SuspendOtherThreads: failed to suspend thread %p", tbi.ClientId.UniqueThread));
-			// SuspendOneThread already closed hCur on failure
-			hCur = NULL;
 		}
 	}
 
-	// close the last handle if it wasn't transferred or wasn't NULL
-	if (hCur != NULL)
+	// close the final cursor handle unless it was handed to the resume list
+	if (hCur != NULL && !bCurKept)
 		NtClose(hCur);
 
 	bRet = !bFailed;
