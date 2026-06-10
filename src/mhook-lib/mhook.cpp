@@ -554,16 +554,53 @@ static BOOL SuspendOneThread(HANDLE hThread, PBYTE pbCode, DWORD cbBytes) {
 //=========================================================================
 // Internal function:
 //
+// Raise the current thread to TIME_CRITICAL for the duration of the
+// suspend / patch / resume so we run to completion quickly (the original
+// pre-NT-native code did this via SetThreadPriority).
+//
+// NtSetInformationThread(ThreadBasePriority) takes a base-priority INCREMENT
+// relative to the process base priority — the same relative space that
+// SetThreadPriority feeds it — whereas ThreadBasicInformation reports ABSOLUTE
+// priorities.  So we save the current increment (thread base − process base)
+// and restore that, rather than reading the absolute dynamic priority and
+// writing it back as an increment (which would leave the thread elevated).
+// Returns the original increment, to be passed to RestoreThreadPriority.
+//=========================================================================
+static LONG BoostCurrentThreadPriority() {
+	THREAD_BASIC_INFORMATION tbi;
+	RtlZeroMemory(&tbi, sizeof(tbi));
+	NtQueryInformationThread(NtCurrentThread(), ThreadBasicInformation, &tbi, sizeof(tbi), NULL);
+
+	PROCESS_BASIC_INFORMATION pbi;
+	RtlZeroMemory(&pbi, sizeof(pbi));
+	NtQueryInformationProcess(NtCurrentProcess(), ProcessBasicInformation, &pbi, sizeof(pbi), NULL);
+
+	LONG origIncrement = (LONG)tbi.BasePriority - (LONG)pbi.BasePriority;
+
+	// 16 == (HIGH_PRIORITY + 1) / 2: the saturation value SetThreadPriority sends
+	// to ThreadBasePriority for THREAD_PRIORITY_TIME_CRITICAL.
+	LONG boost = 16;
+	NtSetInformationThread(NtCurrentThread(), ThreadBasePriority, &boost, sizeof(boost));
+	return origIncrement;
+}
+
+//=========================================================================
+// Internal function:
+//
+// Restore a thread base priority saved by BoostCurrentThreadPriority.
+//=========================================================================
+static VOID RestoreThreadPriority(LONG origIncrement) {
+	NtSetInformationThread(NtCurrentThread(), ThreadBasePriority, &origIncrement, sizeof(origIncrement));
+}
+
+//=========================================================================
+// Internal function:
+//
 // Resumes all previously suspended threads in the current process.
 //=========================================================================
 static VOID ResumeOtherThreads() {
 	// make sure things go as fast as possible
-	THREAD_BASIC_INFORMATION tbi;
-	RtlZeroMemory(&tbi, sizeof(tbi));
-	NtQueryInformationThread(NtCurrentThread(), ThreadBasicInformation, &tbi, sizeof(tbi), NULL);
-	KPRIORITY origPriority = tbi.Priority;
-	KPRIORITY hiPri = (KPRIORITY)THREAD_PRIORITY_TIME_CRITICAL;
-	NtSetInformationThread(NtCurrentThread(), ThreadBasePriority, &hiPri, sizeof(hiPri));
+	LONG origIncrement = BoostCurrentThreadPriority();
 	// go through our list
 	for (DWORD i = 0; i < g_nThreadHandles; i++) {
 		// resume & close thread handles
@@ -575,7 +612,7 @@ static VOID ResumeOtherThreads() {
 	mhook_free(g_hThreadHandles);
 	g_hThreadHandles = NULL;
 	g_nThreadHandles = 0;
-	NtSetInformationThread(NtCurrentThread(), ThreadBasePriority, &origPriority, sizeof(origPriority));
+	RestoreThreadPriority(origIncrement);
 }
 
 //=========================================================================
@@ -585,13 +622,10 @@ static VOID ResumeOtherThreads() {
 // instruction pointer is not in the given range.
 //=========================================================================
 static BOOL SuspendOtherThreads(PBYTE pbCode, DWORD cbBytes) {
-	// make sure we're the most important thread in the process
-	THREAD_BASIC_INFORMATION tbi;
-	RtlZeroMemory(&tbi, sizeof(tbi));
-	NtQueryInformationThread(NtCurrentThread(), ThreadBasicInformation, &tbi, sizeof(tbi), NULL);
-	KPRIORITY origPriority = tbi.Priority;
-	KPRIORITY hiPri = (KPRIORITY)THREAD_PRIORITY_TIME_CRITICAL;
-	NtSetInformationThread(NtCurrentThread(), ThreadBasePriority, &hiPri, sizeof(hiPri));
+	// make sure we're the most important thread in the process while we patch
+	LONG origIncrement = BoostCurrentThreadPriority();
+
+	THREAD_BASIC_INFORMATION tbi;   // reused to identify ourselves in the walk below
 
 	// -----------------------------------------------------------------------
 	// Pass 1: enumerate every other thread into g_hThreadHandles, WITHOUT
@@ -672,7 +706,7 @@ static BOOL SuspendOtherThreads(PBYTE pbCode, DWORD cbBytes) {
 		mhook_free(g_hThreadHandles);
 		g_hThreadHandles = NULL;
 		g_nThreadHandles = 0;
-		NtSetInformationThread(NtCurrentThread(), ThreadBasePriority, &origPriority, sizeof(origPriority));
+		RestoreThreadPriority(origIncrement);
 		return FALSE;
 	}
 
@@ -696,7 +730,7 @@ static BOOL SuspendOtherThreads(PBYTE pbCode, DWORD cbBytes) {
 	}
 	g_nThreadHandles = nSuspended;
 
-	NtSetInformationThread(NtCurrentThread(), ThreadBasePriority, &origPriority, sizeof(origPriority));
+	RestoreThreadPriority(origIncrement);
 	return TRUE;
 }
 
