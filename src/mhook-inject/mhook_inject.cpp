@@ -705,9 +705,12 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
 
 #ifdef _M_X64
     // Bootstrap-thunk-frame unwind registration + deregistration.
-    // BootstrapThunkRF is a RUNTIME_FUNCTION with offsets relative to BootstrapThunkBase
-    // (= rCode).  BootstrapThunkUI contains the raw UNWIND_INFO bytes describing
-    // InjectBootstrapThunkEntry's prolog: push rbx (1 byte) + sub rsp,28h (4 bytes).
+    // BootstrapThunkRF (a RUNTIME_FUNCTION, offsets relative to BootstrapThunkBase
+    // = rCode) describes the thunk's extent and points at BootstrapThunkUI, the
+    // UNWIND_INFO for InjectBootstrapThunkEntry's prolog: push rbx (1 byte) +
+    // sub rsp,20h (4 bytes).  UNWIND_INFO carries UnwindCode[0] inline; the second
+    // code lives in the contiguous BootstrapThunkUC field.
+    enum { UNWIND_REG_RBX = 3 };                     // OpInfo register code for RBX
     if (rtlAddFuncRva) {
         rp.RtlAddFunctionTable    = (PVOID)(remoteNtdllBase + rtlAddFuncRva);
         rp.RtlDeleteFunctionTable = rtlDelFuncRva
@@ -715,28 +718,27 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
                                     : NULL;
         rp.BootstrapThunkBase = (ULONG64)rCode;
 
-        // RUNTIME_FUNCTION offsets (all relative to BootstrapThunkBase = rCode):
-        rp.BootstrapThunkRF[0] = 0;               // BeginAddress: start of bootstrap thunk
-        rp.BootstrapThunkRF[1] = (ULONG)codeSize; // EndAddress:   exclusive end
-        rp.BootstrapThunkRF[2] = (ULONG)(codeSize +
+        rp.BootstrapThunkRF.BeginAddress = 0;               // start of bootstrap thunk
+        rp.BootstrapThunkRF.EndAddress   = (ULONG)codeSize; // exclusive end
+        rp.BootstrapThunkRF.UnwindData   = (ULONG)(codeSize +
                              offsetof(MHOOK_INJECT_REMOTE_PARAMS, BootstrapThunkUI));
 
-        // UNWIND_INFO for: push rbx (CodeOffset=1) + sub rsp,20h (CodeOffset=5)
-        //   Byte 0: Version=1 (bits 0-2), Flags=0 (bits 3-7)        => 0x01
-        //   Byte 1: SizeOfProlog = 5                                  => 0x05
-        //   Byte 2: CountOfCodes = 2                                  => 0x02
-        //   Byte 3: FrameRegister=0, FrameOffset=0                   => 0x00
-        //   Code[0]: CodeOffset=5, UWOP_ALLOC_SMALL(2), OpInfo=3     => 0x05,0x32
-        //            (OpInfo+1)*8=32 == 0x20; codes ordered end→begin
-        //   Code[1]: CodeOffset=1, UWOP_PUSH_NONVOL(0), OpInfo=3(RBX)=> 0x01,0x30
-        rp.BootstrapThunkUI[0] = 0x01;
-        rp.BootstrapThunkUI[1] = 0x05;
-        rp.BootstrapThunkUI[2] = 0x02;
-        rp.BootstrapThunkUI[3] = 0x00;
-        rp.BootstrapThunkUI[4] = 0x05;
-        rp.BootstrapThunkUI[5] = 0x32;
-        rp.BootstrapThunkUI[6] = 0x01;
-        rp.BootstrapThunkUI[7] = 0x30;
+        // UNWIND_INFO describing: push rbx (CodeOffset=1) + sub rsp,20h (CodeOffset=5).
+        rp.BootstrapThunkUI.Version       = 1;
+        rp.BootstrapThunkUI.Flags         = 0;   // no exception handler
+        rp.BootstrapThunkUI.SizeOfProlog  = 5;   // bytes covered: push(1) + sub(4)
+        rp.BootstrapThunkUI.CountOfCodes  = 2;
+        rp.BootstrapThunkUI.FrameRegister = 0;   // no frame pointer
+        rp.BootstrapThunkUI.FrameOffset   = 0;
+        // Codes are ordered last-prolog-op first.
+        // sub rsp,20h: for UWOP_ALLOC_SMALL, OpInfo = (alloc size - 8) / 8.
+        rp.BootstrapThunkUI.UnwindCode[0].CodeOffset = 5;
+        rp.BootstrapThunkUI.UnwindCode[0].UnwindOp   = UWOP_ALLOC_SMALL;
+        rp.BootstrapThunkUI.UnwindCode[0].OpInfo     = (0x20 - 8) / 8;
+        // push rbx: for UWOP_PUSH_NONVOL, OpInfo is the register code.
+        rp.BootstrapThunkUC.CodeOffset = 1;
+        rp.BootstrapThunkUC.UnwindOp   = UWOP_PUSH_NONVOL;
+        rp.BootstrapThunkUC.OpInfo     = UNWIND_REG_RBX;
     }
 #endif
 

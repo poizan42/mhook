@@ -267,6 +267,55 @@ typedef struct _OBJECT_BASIC_INFORMATION {
 } OBJECT_BASIC_INFORMATION, *POBJECT_BASIC_INFORMATION;
 
 // ---------------------------------------------------------------------------
+// x64 dynamic-function-table unwind info (RtlAddFunctionTable / RtlDeleteFunctionTable).
+//
+// winnt.h supplies RUNTIME_FUNCTION (the AMD64 _IMAGE_RUNTIME_FUNCTION_ENTRY)
+// but NOT UNWIND_INFO / UNWIND_CODE / the UWOP_* opcodes, so they are declared
+// here to match the published x64 unwind ABI.  Used to register unwind data for
+// the remote bootstrap-thunk frame in mhook_inject.
+// ---------------------------------------------------------------------------
+
+#ifdef _M_X64
+
+// Prolog unwind operations (UNWIND_CODE.UnwindOp).
+typedef enum _UNWIND_OP_CODES {
+    UWOP_PUSH_NONVOL     = 0,   // OpInfo = register pushed
+    UWOP_ALLOC_LARGE     = 1,   // OpInfo = 0: size in next slot; 1: in next two
+    UWOP_ALLOC_SMALL     = 2,   // OpInfo = (alloc size - 8) / 8
+    UWOP_SET_FPREG       = 3,
+    UWOP_SAVE_NONVOL     = 4,
+    UWOP_SAVE_NONVOL_FAR = 5,
+    UWOP_SAVE_XMM128     = 8,
+    UWOP_SAVE_XMM128_FAR = 9,
+    UWOP_PUSH_MACHFRAME  = 10
+} UNWIND_OP_CODES;
+
+// One prolog operation.  (Windows declares this as a union whose USHORT
+// FrameOffset alternate is used by the multi-slot opcodes.)
+typedef union _UNWIND_CODE {
+    struct {
+        UCHAR CodeOffset;       // prolog offset at which the op has executed
+        UCHAR UnwindOp : 4;     // one of UWOP_*
+        UCHAR OpInfo   : 4;     // operation-specific info
+    };
+    USHORT FrameOffset;
+} UNWIND_CODE, *PUNWIND_CODE;
+
+// Unwind descriptor for a function's prolog.  UnwindCode[] is variable length
+// (CountOfCodes entries, padded to an even count); declared [1] by convention.
+typedef struct _UNWIND_INFO {
+    UCHAR Version       : 3;    // = 1
+    UCHAR Flags         : 5;    // UNW_FLAG_* (0 = no exception handler)
+    UCHAR SizeOfProlog;
+    UCHAR CountOfCodes;
+    UCHAR FrameRegister : 4;
+    UCHAR FrameOffset   : 4;
+    UNWIND_CODE UnwindCode[1];
+} UNWIND_INFO, *PUNWIND_INFO;
+
+#endif // _M_X64
+
+// ---------------------------------------------------------------------------
 // Process Environment Block — fields up to and including ProcessHeap.
 //
 // Layout (phnt ntpebteb.h):
