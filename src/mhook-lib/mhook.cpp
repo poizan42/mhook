@@ -540,8 +540,14 @@ static BOOL SuspendOneThread(HANDLE hThread, PBYTE pbCode, DWORD cbBytes) {
 				return TRUE;
 			}
 		}
+		// NtGetContextThread failed: we hold a suspend on this thread but cannot
+		// verify its IP.  Resume so we never leak the suspend, then report failure.
+		ODPRINTF(("mhooks: SuspendOneThread: NtGetContextThread failed; resuming thread"));
+		NtResumeThread(hThread, &dwSuspendCount);
+		return FALSE;
 	}
-	// couldn't suspend — caller owns the handle
+	// NtSuspendThread failed — never suspended, so nothing to undo.
+	ODPRINTF(("mhooks: SuspendOneThread: NtSuspendThread failed (status %08X)", (ULONG)st));
 	return FALSE;
 }
 
