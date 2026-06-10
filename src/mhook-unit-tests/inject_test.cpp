@@ -13,6 +13,7 @@
 #pragma comment(lib, "psapi.lib")
 
 #include <string>
+#include <cwchar>
 #include "../mhook-inject/mhook_inject.h"
 
 // ---------------------------------------------------------------------------
@@ -179,6 +180,28 @@ TEST(MhookInjectTest, RejectsLimitedAccessHandle)
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 }
+
+// ---------------------------------------------------------------------------
+// Dynamic builds embed a message-table resource in mhook_inject.dll so the
+// MHOOK_INJECT_E_* HRESULTs are retrievable with FormatMessage.  (Static builds
+// carry no resource — compiled out below.)
+// ---------------------------------------------------------------------------
+
+#ifndef MHOOK_STATIC
+TEST(MhookInjectTest, ErrorMessagesAreFormattable)
+{
+    HMODULE h = GetModuleHandleW(L"mhook_inject.dll");
+    ASSERT_NE(h, nullptr) << "mhook_inject.dll not loaded (" << GetLastError() << ")";
+
+    WCHAR buf[256] = {};
+    DWORD n = FormatMessageW(FORMAT_MESSAGE_FROM_HMODULE | FORMAT_MESSAGE_IGNORE_INSERTS,
+                             h, (DWORD)MHOOK_INJECT_E_ACCESS, 0, buf, ARRAYSIZE(buf), NULL);
+    EXPECT_GT(n, 0u)
+        << "FormatMessage(MHOOK_INJECT_E_ACCESS) failed (" << GetLastError() << ")";
+    EXPECT_NE(wcsstr(buf, L"PROCESS_ALL_ACCESS"), nullptr)
+        << "unexpected message text";
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // Helper shared by both delayed tests

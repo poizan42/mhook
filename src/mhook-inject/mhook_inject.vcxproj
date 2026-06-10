@@ -391,6 +391,25 @@
     <None Include="inject_entry.def" />
   </ItemGroup>
 
+  <!-- ===== Message-table resource (dynamic builds only) =====
+       mc.exe -c compiles mhook_inject_messages.mc into a .rc + MSG00409.bin whose message
+       IDs equal the public MHOOK_INJECT_E_* HRESULTs (the -c "Customer bit" flag yields
+       0xA00000xx).  The generated .rc is then compiled and linked into mhook_inject.dll so
+       the strings are retrievable via FormatMessage(FORMAT_MESSAGE_FROM_HMODULE, ...).
+       Excluded from the static (.lib) configs — those carry no resource. -->
+  <ItemGroup>
+    <CustomBuild Include="mhook_inject_messages.mc">
+      <ExcludedFromBuild Condition="'$(ConfigurationType)'!='DynamicLibrary'">true</ExcludedFromBuild>
+      <Command>mc.exe -c -U -h "$(IntDir)." -r "$(IntDir)." "%(FullPath)"</Command>
+      <Outputs>$(IntDir)mhook_inject_messages.rc;$(IntDir)MSG00409.bin;%(Outputs)</Outputs>
+      <Message>mc %(Filename)%(Extension)</Message>
+    </CustomBuild>
+    <ResourceCompile Include="$(IntDir)mhook_inject_messages.rc">
+      <ExcludedFromBuild Condition="'$(ConfigurationType)'!='DynamicLibrary'">true</ExcludedFromBuild>
+      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+  </ItemGroup>
+
   <!-- ===== Project references ===== -->
   <ItemGroup>
     <!-- ntdll_extra_stub: needed so CombineWithNtdllExtra can find ntdll_extra.lib -->

@@ -33,6 +33,12 @@ extern "C" {
 // (FACILITY_*).  Other failures are propagated as-is (e.g. an NTSTATUS mapped to
 // an HRESULT), so always test with FAILED(hr) and only compare against these for
 // specific handling.
+//
+// Dynamic builds (mhook_inject.dll) embed a message-table resource for these codes,
+// so the text can be retrieved with FormatMessage:
+//   FormatMessageW(FORMAT_MESSAGE_FROM_HMODULE, GetModuleHandleW(L"mhook_inject.dll"),
+//                  hr, 0, buf, cch, NULL);
+// Static builds carry no resource (the consumer's own module would have to supply one).
 // ---------------------------------------------------------------------------
 
 #define MHOOK_INJECT_E_PARAMS    ((HRESULT)0xA0000001L)  // bad/incompatible params

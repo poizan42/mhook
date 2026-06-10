@@ -86,6 +86,19 @@ remote thread that loads the companion DLL and calls the injection function,
 waits for the thread to complete, then frees the allocation.  Returns `S_OK` on
 success or an `HRESULT` error code.
 
+The library's own failure codes (`MHOOK_INJECT_E_*` in `mhook-inject/mhook_inject.h`)
+set the HRESULT Customer bit (`0xA00000xx`).  In **dynamic** builds, `mhook_inject.dll`
+embeds a message-table resource for them, so they can be turned into text with
+`FormatMessage`:
+
+```c
+WCHAR buf[256];
+FormatMessageW(FORMAT_MESSAGE_FROM_HMODULE,
+               GetModuleHandleW(L"mhook_inject.dll"), hr, 0, buf, 256, NULL);
+```
+
+(Static builds carry no resource — the consumer's own module would supply one.)
+
 ### `MHOOK_INJECT_PARAMS`
 
 ```c
