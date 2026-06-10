@@ -243,6 +243,30 @@ typedef struct _PROCESS_BASIC_INFORMATION {
 } PROCESS_BASIC_INFORMATION, *PPROCESS_BASIC_INFORMATION;
 
 // ---------------------------------------------------------------------------
+// NtQueryObject(ObjectBasicInformation) — used to read a handle's GRANTED
+// access mask (the GrantedAccess field).  Only GrantedAccess is consumed, but
+// the full struct must be declared so the query buffer is correctly sized.
+// ---------------------------------------------------------------------------
+
+#ifndef ObjectBasicInformation
+#define ObjectBasicInformation  0UL
+#endif
+
+typedef struct _OBJECT_BASIC_INFORMATION {
+    ULONG         Attributes;
+    ACCESS_MASK   GrantedAccess;
+    ULONG         HandleCount;
+    ULONG         PointerCount;
+    ULONG         PagedPoolCharge;
+    ULONG         NonPagedPoolCharge;
+    ULONG         Reserved[3];
+    ULONG         NameInfoSize;
+    ULONG         TypeInfoSize;
+    ULONG         SecurityDescriptorSize;
+    LARGE_INTEGER CreationTime;
+} OBJECT_BASIC_INFORMATION, *POBJECT_BASIC_INFORMATION;
+
+// ---------------------------------------------------------------------------
 // Process Environment Block — fields up to and including ProcessHeap.
 //
 // Layout (phnt ntpebteb.h):
@@ -631,6 +655,14 @@ NTSTATUS NTAPI NtQueryInformationProcess(
     ULONG       ProcessInformationClass,
     PVOID       ProcessInformation,
     ULONG       ProcessInformationLength,
+    PULONG      ReturnLength);
+
+// Object query — used to read a handle's granted access (ObjectBasicInformation)
+NTSTATUS NTAPI NtQueryObject(
+    HANDLE      Handle,
+    ULONG       ObjectInformationClass,
+    PVOID       ObjectInformation,
+    ULONG       ObjectInformationLength,
     PULONG      ReturnLength);
 
 // Loader

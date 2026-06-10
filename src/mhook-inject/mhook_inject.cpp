@@ -31,6 +31,7 @@ extern "C" char InjectShellcodeEnd[];
 #define MHOOK_INJECT_E_NO_NTDLL  ((HRESULT)0x80040002L)  // ntdll not found in target
 #define MHOOK_INJECT_E_NO_EXEC   ((HRESULT)0x80040003L)  // _internal_Execute not in DLL
 #define MHOOK_INJECT_E_TIMEOUT   ((HRESULT)0x80040004L)  // remote thread timed out
+#define MHOOK_INJECT_E_ACCESS    ((HRESULT)0x80040005L)  // target handle lacks PROCESS_ALL_ACCESS
 
 static HRESULT HrFromNt(NTSTATUS s)
 {
@@ -244,6 +245,35 @@ static BOOLEAN IsTargetWow64(HANDLE hProcess)
     NTSTATUS st = NtQueryInformationProcess(hProcess, ProcessWow64Information,
                                             &wow64Info, sizeof(wow64Info), NULL);
     return NT_SUCCESS(st) && wow64Info != NULL;
+}
+
+// PROCESS_ALL_ACCESS is STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0xFFFF, i.e.
+// 0x1FFFFF on current Windows (NTDDI >= Vista).  Pin the value: if a future SDK
+// or OS adds process-specific access bits, this fails to compile and forces a
+// deliberate decision about whether the all-access guard below should require
+// the new bits too (rather than silently accepting handles that lack them).
+static_assert(PROCESS_ALL_ACCESS == 0x1FFFFF,
+              "PROCESS_ALL_ACCESS changed — re-evaluate the Mhook_Inject access guard");
+
+// ---------------------------------------------------------------------------
+// TargetHasAllAccess — TRUE only if the handle was granted PROCESS_ALL_ACCESS.
+//
+// Deliberate guard so the library isn't a convenient privilege-escalation /
+// exploitation primitive: we refuse to operate through a deliberately minimal
+// handle.  A determined caller can still open a full-access handle (or patch
+// this out) — that is on them; we just won't help.  We read the handle's GRANTED
+// access via NtQueryObject (not what the caller claims), and fail closed if the
+// query fails.
+// ---------------------------------------------------------------------------
+
+static BOOLEAN TargetHasAllAccess(HANDLE hProcess)
+{
+    OBJECT_BASIC_INFORMATION obi;
+    RtlZeroMemory(&obi, sizeof(obi));
+    if (!NT_SUCCESS(NtQueryObject(hProcess, ObjectBasicInformation,
+                                  &obi, sizeof(obi), NULL)))
+        return FALSE;
+    return (obi.GrantedAccess & PROCESS_ALL_ACCESS) == PROCESS_ALL_ACCESS;
 }
 
 // ---------------------------------------------------------------------------
@@ -483,6 +513,10 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
         return MHOOK_INJECT_E_PARAMS;
     if (!params->TargetProcess)
         return MHOOK_INJECT_E_PARAMS;
+
+    // Deliberate guard: require a full-access target handle (see TargetHasAllAccess).
+    if (!TargetHasAllAccess(params->TargetProcess))
+        return MHOOK_INJECT_E_ACCESS;
 
     BOOLEAN useFnPtr = (params->FunctionPointer != NULL);
     BOOLEAN useName  = (params->DllPath != NULL && params->FunctionName != NULL);

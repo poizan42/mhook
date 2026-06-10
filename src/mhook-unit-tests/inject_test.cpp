@@ -134,6 +134,53 @@ TEST(MhookInjectTest, ExecutesInUninitializedProcess)
 }
 
 // ---------------------------------------------------------------------------
+// Mhook_Inject deliberately requires a PROCESS_ALL_ACCESS target handle (a basic
+// anti-exploitation guard).  A handle with only the minimal injection rights
+// must be rejected.
+// ---------------------------------------------------------------------------
+
+TEST(MhookInjectTest, RejectsLimitedAccessHandle)
+{
+    // Create cmd.exe suspended.  We never resume it — injection must be refused
+    // up front, before anything is written to the target.
+    wchar_t cmdLine[] = L"cmd.exe";
+    STARTUPINFOW si   = { sizeof(si) };
+    PROCESS_INFORMATION pi = {};
+    BOOL created = CreateProcessW(NULL, cmdLine, NULL, NULL, FALSE,
+                                  CREATE_SUSPENDED | CREATE_NO_WINDOW,
+                                  NULL, NULL, &si, &pi);
+    if (!created)
+        GTEST_SKIP() << "Could not create cmd.exe (" << GetLastError() << ")";
+
+    // Derive a handle with only the rights a minimal injector would want — less
+    // than PROCESS_ALL_ACCESS.
+    HANDLE hLimited = NULL;
+    BOOL dup = DuplicateHandle(GetCurrentProcess(), pi.hProcess,
+                               GetCurrentProcess(), &hLimited,
+                               PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_CREATE_THREAD,
+                               FALSE, 0);
+    ASSERT_TRUE(dup) << "DuplicateHandle failed (" << GetLastError() << ")";
+
+    // Otherwise-valid params, so the access guard is the only reason to reject.
+    MHOOK_INJECT_PARAMS params = {};
+    params.Size          = sizeof(params);
+    params.TargetProcess = hLimited;
+    params.DllPath       = L"mhook_inject_test_companion.dll";
+    params.FunctionName  = "Inject_WriteMarkerAndResume";
+
+    HRESULT hr = Mhook_Inject(&params);
+
+    EXPECT_TRUE(FAILED(hr))
+        << "Mhook_Inject must reject a target handle without PROCESS_ALL_ACCESS;"
+        << " hr=0x" << std::hex << hr;
+
+    CloseHandle(hLimited);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+}
+
+// ---------------------------------------------------------------------------
 // Helper shared by both delayed tests
 // ---------------------------------------------------------------------------
 

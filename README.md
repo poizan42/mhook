@@ -92,8 +92,8 @@ success or an `HRESULT` error code.
 typedef struct _MHOOK_INJECT_PARAMS {
     ULONG  Size;           // sizeof(MHOOK_INJECT_PARAMS) — version guard
 
-    HANDLE TargetProcess;  // requires PROCESS_VM_OPERATION |
-                           //          PROCESS_VM_WRITE | PROCESS_CREATE_THREAD
+    HANDLE TargetProcess;  // must be a PROCESS_ALL_ACCESS handle (deliberate
+                           // guard; Mhook_Inject refuses anything less)
 
     // Target function — set EXACTLY ONE of the two forms:
 

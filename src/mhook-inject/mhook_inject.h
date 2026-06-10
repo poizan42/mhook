@@ -36,8 +36,12 @@ typedef struct _MHOOK_INJECT_PARAMS {
     // Combination of MHOOK_INJECT_FLAG_* values; 0 = default behaviour.
     ULONG  Flags;
 
-    // Handle to the target process.  Must have at minimum:
-    //   PROCESS_VM_OPERATION | PROCESS_VM_WRITE | PROCESS_CREATE_THREAD
+    // Handle to the target process.  Must be a PROCESS_ALL_ACCESS handle.
+    // (Mhook_Inject deliberately requires full access — it is not meant to be a
+    // privilege-escalation aid — and fails if the handle was granted anything
+    // less.  The underlying operations only need PROCESS_VM_OPERATION |
+    // PROCESS_VM_WRITE | PROCESS_CREATE_THREAD; the stricter requirement is an
+    // intentional guard.)
     HANDLE TargetProcess;
 
     // Target injection function — set EXACTLY ONE of the two forms below.

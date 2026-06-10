@@ -8,6 +8,7 @@ EXPORTS
     NtOpenFile
     NtReadFile
     NtQueryInformationProcess
+    NtQueryObject
     LdrLoadDll
     LdrGetProcedureAddress
     _snprintf
