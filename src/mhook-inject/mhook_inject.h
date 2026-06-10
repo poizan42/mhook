@@ -1,7 +1,7 @@
 // mhook_inject.h — public API for mhook_inject.
 //
 // Mhook_Inject injects a function into a remote process using a small
-// shellcode stub that loads a companion DLL and calls _internal_Execute,
+// bootstrap-thunk stub that loads a companion DLL and calls _internal_Execute,
 // which in turn sets up a MhookInjectContext and calls the user-supplied
 // injection function.
 //

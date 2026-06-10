@@ -1,9 +1,9 @@
-; uninit_test_shellcode_x64.asm — remote-thread entry point for x64 injection.
+; uninit_test_bootstrap_thunk_x64.asm — remote-thread entry point for x64 injection.
 ;
-; Called as:  DWORD WINAPI ShellcodeEntry(LPVOID lpParam)
-;   RCX = pointer to ShellcodeParams (see uninit_test.cpp)
+; Called as:  DWORD WINAPI BootstrapThunkEntry(LPVOID lpParam)
+;   RCX = pointer to BootstrapThunkParams (see uninit_test.cpp)
 ;
-; ShellcodeParams field offsets (x64) — must match the C struct in uninit_test.cpp.
+; BootstrapThunkParams field offsets (x64) — must match the C struct in uninit_test.cpp.
 ; Path strings are written AFTER the struct in the same remote allocation;
 ; UNICODE_STRING.Buffer pointers are set by the test to those remote addresses.
 ; UNICODE_STRING is 16 bytes on x64 (2+2+4pad+8).
@@ -16,14 +16,14 @@ PARAM_IsDynamic         EQU 40          ; ULONG (4)
 PARAM__pad              EQU 44          ; ULONG (4, alignment)
 PARAM_MhookPath         EQU 48          ; UNICODE_STRING (16)
 PARAM_MhookHandle           EQU 64          ; HANDLE (8)     = 48+16
-PARAM_LdrCompanionStatus    EQU 72          ; NTSTATUS (4) diagnostic — sizeof(ShellcodeParams) without this = 72
+PARAM_LdrCompanionStatus    EQU 72          ; NTSTATUS (4) diagnostic — sizeof(BootstrapThunkParams) without this = 72
 
-        PUBLIC ShellcodeEnd
+        PUBLIC BootstrapThunkEnd
 
 .code
 
 ; ---------------------------------------------------------------------------
-ShellcodeEntry PROC
+BootstrapThunkEntry PROC
         push    rbx
         ; x64 ABI: RSP is 8 (mod 16) at entry; "push rbx" makes it 0 (mod 16), so
         ; the allocation must be a multiple of 16 to keep RSP 16-aligned at the
@@ -31,7 +31,7 @@ ShellcodeEntry PROC
         ; 16-byte-aligned locals (e.g. CONTEXT in NtGetContextThread) fail.
         sub     rsp, 20h            ; 32-byte shadow space, keeps RSP 16-aligned
 
-        mov     rbx, rcx            ; save ShellcodeParams*
+        mov     rbx, rcx            ; save BootstrapThunkParams*
 
         ; --- Load companion DLL ---
         ; LdrLoadDll(NULL, NULL, &CompanionPath, &CompanionHandle)
@@ -67,10 +67,10 @@ CallExecute:
         pop     rbx
         ret
 
-; Sentinel: immediately follows ShellcodeEntry so that
-; (ShellcodeEnd - ShellcodeEntry) gives the code size.
-ShellcodeEnd::
+; Sentinel: immediately follows BootstrapThunkEntry so that
+; (BootstrapThunkEnd - BootstrapThunkEntry) gives the code size.
+BootstrapThunkEnd::
         nop
-ShellcodeEntry ENDP
+BootstrapThunkEntry ENDP
 
 END

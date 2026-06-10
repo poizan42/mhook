@@ -72,13 +72,13 @@ On `SetHook`, the library: suspends all other threads (via `NtGetNextThread` + `
 
 ### Remote injection (`src/mhook-inject/`)
 
-`mhook_inject.cpp` implements `Mhook_Inject` (calling-process side): allocates a code+data blob in the target process, writes the `MhookInjectRemoteParams` struct, creates a remote thread running the shellcode stub, and waits for completion.
+`mhook_inject.cpp` implements `Mhook_Inject` (calling-process side): allocates a code+data blob in the target process, writes the `MhookInjectRemoteParams` struct, creates a remote thread running the bootstrap-thunk stub, and waits for completion.
 
 `inject_entry.c` is the code that runs inside the target process (`_internal_Execute`): loads the companion DLL via `LdrLoadDll`, resolves the user function, builds a `MHOOK_INJECT_CONTEXT`, and calls the function.
 
 `inject_delayed_entry_thunk_x64/x86.asm` are MASM thunks that call `DoDelayedEntry` then JMP (not CALL) to the returned address so no hook frame remains on the stack when `DELAY_UNTIL_INIT` is used.
 
-`inject_shellcode_x64.asm` / `inject_shellcode_x86.asm` are the shellcode stubs written into the remote process.
+`inject_bootstrap_thunk_x64.asm` / `inject_bootstrap_thunk_x86.asm` are the bootstrap-thunk stubs written into the remote process (the position-independent code that `LdrLoadDll`s the companion DLL and calls `_internal_Execute`).
 
 **`DELAY_UNTIL_INIT` flow:** when set, the injection function is deferred until the target has finished loader initialisation, by hooking the process **entry point** so the user function runs on the target's *main* thread (with Win32 available) just before the entry point executes. The delayed-vs-immediate decision is **caller-authoritative**: `Mhook_Inject` reads the target's `PEB_LDR_DATA.Initialized` *before* creating the injection thread and passes `MHOOK_REMOTE_FLAG_TARGET_UNINITIALIZED` in the remote params; `_internal_Execute` trusts that bit (falling back to its own `IsProcessInitialized()` only if the caller couldn't read the state). This indirection exists because **creating the injection thread itself runs loader init in the target** (see Invariants), so an in-target `IsProcessInitialized()` check at `_internal_Execute` time is unreliable.
 
@@ -90,7 +90,7 @@ On `SetHook`, the library: suspends all other threads (via `NtGetNextThread` + `
 
 ### `MhookInjectRemoteParams` struct (`src/mhook-inject/inject_params.h`)
 
-This `#pragma pack(1)` struct is written into the remote process immediately after the shellcode. Its layout is fixed and verified with `static_assert` offset checks for both x64 (180 bytes) and x86 (80 bytes). Any change to field order must keep all offset assertions passing.
+This `#pragma pack(1)` struct is written into the remote process immediately after the bootstrap thunk. Its layout is fixed and verified with `static_assert` offset checks for both x64 (180 bytes) and x86 (80 bytes). Any change to field order must keep all offset assertions passing.
 
 ### `ntdll_extra_stub` (`src/ntdll_extra_stub/`)
 
@@ -114,8 +114,8 @@ Instruction-length decoder (originally by Matt Conover) for x86 and x64. Used by
 
 ## Invariants & gotchas (non-obvious, easy to break)
 
-### x64 shellcode stack alignment
-The remote-thread shellcodes (`src/mhook-inject/inject_shellcode_x64.asm` and `src/mhook-unit-tests/uninit_test_shellcode_x64.asm`) **must keep RSP 16-byte aligned at every `call`**. Per the x64 ABI, RSP ≡ 8 (mod 16) at `PROC` entry; after `push rbx` it is ≡ 0, so the prologue's `sub rsp, N` must use **N ≡ 0 (mod 16)** — use `0x20` (the 32-byte shadow space), not `0x28`. A misaligned stack makes any 16-byte-aligned local in a callee (notably the `CONTEXT` used by `NtGetContextThread` in `SuspendOneThread`) fault with `STATUS_DATATYPE_MISALIGNMENT`, with confusing downstream symptoms. Three things must stay in sync: the prologue `sub rsp`, the matching epilogue `add rsp`, and — for `inject_shellcode_x64.asm` — the hand-encoded `UNWIND_INFO` (`rp.ShellcodeUI[...]` / `UWOP_ALLOC_SMALL`) in `mhook_inject.cpp`.
+### x64 bootstrap-thunk stack alignment
+The remote-thread bootstrap thunks (`src/mhook-inject/inject_bootstrap_thunk_x64.asm` and `src/mhook-unit-tests/uninit_test_bootstrap_thunk_x64.asm`) **must keep RSP 16-byte aligned at every `call`**. Per the x64 ABI, RSP ≡ 8 (mod 16) at `PROC` entry; after `push rbx` it is ≡ 0, so the prologue's `sub rsp, N` must use **N ≡ 0 (mod 16)** — use `0x20` (the 32-byte shadow space), not `0x28`. A misaligned stack makes any 16-byte-aligned local in a callee (notably the `CONTEXT` used by `NtGetContextThread` in `SuspendOneThread`) fault with `STATUS_DATATYPE_MISALIGNMENT`, with confusing downstream symptoms. Three things must stay in sync: the prologue `sub rsp`, the matching epilogue `add rsp`, and — for `inject_bootstrap_thunk_x64.asm` — the hand-encoded `UNWIND_INFO` (`rp.BootstrapThunkUI[...]` / `UWOP_ALLOC_SMALL`) in `mhook_inject.cpp`.
 
 ### Injecting a runnable thread initialises the target process
 Creating a thread with `NtCreateThreadEx` in a still-suspended target runs `ntdll!LdrInitializeThunk → LdrpInitializeProcess` as a side effect (whichever thread runs user code first wins the loader-init CAS), flipping `PEB_LDR_DATA.Initialized` to TRUE before `_internal_Execute` runs. This is why the `DELAY_UNTIL_INIT` decision is made caller-side (above). Background on the loader/thread mechanics is captured in `G:\projects-ext\claude-notes\ntapi\` (`process-initialization.md`, `NtCreateThreadEx.md`).

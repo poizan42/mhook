@@ -237,12 +237,12 @@ When using the **static** `mhook_inject.lib`, the injection function lives in
 a DLL that is loaded into the target process.  That DLL must:
 
 1. **Link `mhook_inject.lib`** — provides `Mhook_Inject` (for the calling side)
-   and `_internal_Execute` (the remote entry point called by the shellcode).
+   and `_internal_Execute` (the remote entry point called by the bootstrap thunk).
 
 2. **Link `mhook.lib`** — provides `Mhook_SetHook`/`Mhook_Unhook`, which
    `_internal_Execute` references directly in static builds.
 
-3. **Re-export `_internal_Execute`** — the shellcode locates and calls this
+3. **Re-export `_internal_Execute`** — the bootstrap thunk locates and calls this
    symbol in the companion DLL.  Add it to the DLL's `.def` file:
 
    ```
@@ -466,7 +466,7 @@ src/
     mhook_inject.h          Public API header
     mhook_inject.cpp        Mhook_Inject implementation (calling-process side)
     inject_entry.c          _internal_Execute (runs in target process)
-    inject_shellcode_x64/x86.asm  Shellcode stubs
+    inject_bootstrap_thunk_x64/x86.asm  Bootstrap-thunk stubs
   mhook-unit-tests/         Google Test test runner
   mhook_test_uninitialized_inject/  Companion DLL for the pre-init hook test (manual)
   mhook_inject_test_companion/      Companion DLL for the Mhook_Inject test

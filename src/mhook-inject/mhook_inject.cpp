@@ -12,16 +12,16 @@
 #include "inject_params.h"
 
 // ---------------------------------------------------------------------------
-// Shellcode blobs — assembled by MASM, linked as object code
+// Bootstrap-thunk blobs — assembled by MASM, linked as object code
 // ---------------------------------------------------------------------------
 
 // Declared as char[] (data symbol) rather than void() (function symbol) so
 // that the MSVC incremental linker does NOT create ILT thunks for them in
 // Debug builds.  ILT thunks are created for PROC symbols; a plain label like
-// InjectShellcodeEnd:: gets the actual address, but InjectShellcodeEntry PROC
+// InjectBootstrapThunkEnd:: gets the actual address, but InjectBootstrapThunkEntry PROC
 // would get its thunk address, making (End - Entry) produce the wrong size.
-extern "C" char InjectShellcodeEntry[];
-extern "C" char InjectShellcodeEnd[];
+extern "C" char InjectBootstrapThunkEntry[];
+extern "C" char InjectBootstrapThunkEnd[];
 
 // ---------------------------------------------------------------------------
 // HRESULT helpers
@@ -600,7 +600,7 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     }
 
     // -----------------------------------------------------------------------
-    // Step 5: Determine target architecture; select shellcode
+    // Step 5: Determine target architecture; select bootstrap thunk
     // -----------------------------------------------------------------------
     {
     BOOLEAN targetIs32 = IsTargetWow64(params->TargetProcess);
@@ -631,8 +631,8 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
 
 #ifdef _M_X64
     // x64: look up RtlAddFunctionTable / RtlDeleteFunctionTable so the
-    // shellcode can register and later remove dynamic unwind info for its
-    // own frame.  Non-fatal if absent — shellcode guards against NULL.
+    // bootstrap thunk can register and later remove dynamic unwind info for its
+    // own frame.  Non-fatal if absent — the bootstrap thunk guards against NULL.
     ULONG rtlAddFuncRva = 0, rtlDelFuncRva = 0;
     GetExportRvaFromFile(localNtdllPath, "RtlAddFunctionTable",    &rtlAddFuncRva);
     GetExportRvaFromFile(localNtdllPath, "RtlDeleteFunctionTable", &rtlDelFuncRva);
@@ -647,7 +647,7 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     // -----------------------------------------------------------------------
     // Step 7: Calculate remote memory layout
     // -----------------------------------------------------------------------
-    SIZE_T codeSize   = (SIZE_T)((BYTE*)InjectShellcodeEnd - (BYTE*)InjectShellcodeEntry);
+    SIZE_T codeSize   = (SIZE_T)((BYTE*)InjectBootstrapThunkEnd - (BYTE*)InjectBootstrapThunkEntry);
     SIZE_T paramsSize = sizeof(MHOOK_INJECT_REMOTE_PARAMS);
 
     auto WStrBytes = [](const WCHAR *s) -> SIZE_T {
@@ -704,22 +704,22 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     rp.UserDataSize   = userDataBytes;
 
 #ifdef _M_X64
-    // Shellcode-frame unwind registration + deregistration.
-    // ShellcodeRF is a RUNTIME_FUNCTION with offsets relative to ShellcodeBase
-    // (= rCode).  ShellcodeUI contains the raw UNWIND_INFO bytes describing
-    // InjectShellcodeEntry's prolog: push rbx (1 byte) + sub rsp,28h (4 bytes).
+    // Bootstrap-thunk-frame unwind registration + deregistration.
+    // BootstrapThunkRF is a RUNTIME_FUNCTION with offsets relative to BootstrapThunkBase
+    // (= rCode).  BootstrapThunkUI contains the raw UNWIND_INFO bytes describing
+    // InjectBootstrapThunkEntry's prolog: push rbx (1 byte) + sub rsp,28h (4 bytes).
     if (rtlAddFuncRva) {
         rp.RtlAddFunctionTable    = (PVOID)(remoteNtdllBase + rtlAddFuncRva);
         rp.RtlDeleteFunctionTable = rtlDelFuncRva
                                     ? (PVOID)(remoteNtdllBase + rtlDelFuncRva)
                                     : NULL;
-        rp.ShellcodeBase = (ULONG64)rCode;
+        rp.BootstrapThunkBase = (ULONG64)rCode;
 
-        // RUNTIME_FUNCTION offsets (all relative to ShellcodeBase = rCode):
-        rp.ShellcodeRF[0] = 0;               // BeginAddress: start of shellcode
-        rp.ShellcodeRF[1] = (ULONG)codeSize; // EndAddress:   exclusive end
-        rp.ShellcodeRF[2] = (ULONG)(codeSize +
-                             offsetof(MHOOK_INJECT_REMOTE_PARAMS, ShellcodeUI));
+        // RUNTIME_FUNCTION offsets (all relative to BootstrapThunkBase = rCode):
+        rp.BootstrapThunkRF[0] = 0;               // BeginAddress: start of bootstrap thunk
+        rp.BootstrapThunkRF[1] = (ULONG)codeSize; // EndAddress:   exclusive end
+        rp.BootstrapThunkRF[2] = (ULONG)(codeSize +
+                             offsetof(MHOOK_INJECT_REMOTE_PARAMS, BootstrapThunkUI));
 
         // UNWIND_INFO for: push rbx (CodeOffset=1) + sub rsp,20h (CodeOffset=5)
         //   Byte 0: Version=1 (bits 0-2), Flags=0 (bits 3-7)        => 0x01
@@ -729,14 +729,14 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
         //   Code[0]: CodeOffset=5, UWOP_ALLOC_SMALL(2), OpInfo=3     => 0x05,0x32
         //            (OpInfo+1)*8=32 == 0x20; codes ordered end→begin
         //   Code[1]: CodeOffset=1, UWOP_PUSH_NONVOL(0), OpInfo=3(RBX)=> 0x01,0x30
-        rp.ShellcodeUI[0] = 0x01;
-        rp.ShellcodeUI[1] = 0x05;
-        rp.ShellcodeUI[2] = 0x02;
-        rp.ShellcodeUI[3] = 0x00;
-        rp.ShellcodeUI[4] = 0x05;
-        rp.ShellcodeUI[5] = 0x32;
-        rp.ShellcodeUI[6] = 0x01;
-        rp.ShellcodeUI[7] = 0x30;
+        rp.BootstrapThunkUI[0] = 0x01;
+        rp.BootstrapThunkUI[1] = 0x05;
+        rp.BootstrapThunkUI[2] = 0x02;
+        rp.BootstrapThunkUI[3] = 0x00;
+        rp.BootstrapThunkUI[4] = 0x05;
+        rp.BootstrapThunkUI[5] = 0x32;
+        rp.BootstrapThunkUI[6] = 0x01;
+        rp.BootstrapThunkUI[7] = 0x30;
     }
 #endif
 
@@ -764,7 +764,7 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     do { st = NtWriteVirtualMemory(params->TargetProcess, dst, (PVOID)(src), len, NULL); \
          if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; } } while(0)
 
-    WRITE(rCode,              InjectShellcodeEntry, codeSize);
+    WRITE(rCode,              InjectBootstrapThunkEntry, codeSize);
     WRITE(rCode + codeSize,   &rp,            paramsSize);
     WRITE(rCompanion,         companionPath,  companionBytes);
     if (isDynamic && mhookPath && mhookBytes)
@@ -782,7 +782,7 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     // -----------------------------------------------------------------------
     st = NtCreateThreadEx(&hThread, THREAD_ALL_ACCESS, NULL,
                            params->TargetProcess,
-                           rCode,              // start = shellcode
+                           rCode,              // start = bootstrap thunk
                            rCode + codeSize,   // arg   = params block
                            0, 0, 0, 0, NULL);
     if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; }
@@ -797,7 +797,7 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     // has already exited and freed its address space.
     // _internal_Execute returns STATUS_SUCCESS when the target function was found
     // and called, STATUS_NOT_FOUND otherwise; that value propagates via rax/eax
-    // through the shellcode ret and becomes the thread's ExitStatus.
+    // through the bootstrap-thunk ret and becomes the thread's ExitStatus.
     {
         THREAD_BASIC_INFORMATION tbi = {};
         NTSTATUS injectStatus = STATUS_UNSUCCESSFUL;

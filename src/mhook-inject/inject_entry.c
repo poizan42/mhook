@@ -1,6 +1,6 @@
 // inject_entry.c — code that runs inside the target process.
 //
-// _internal_Execute is called by the shellcode after the companion DLL
+// _internal_Execute is called by the bootstrap thunk after the companion DLL
 // (and, for dynamic builds, mhook.dll) has been loaded.  It resolves the
 // user-supplied injection function, builds a MhookInjectContext, and calls
 // the function.  Thread management (suspend/resume) is the caller's
@@ -159,7 +159,7 @@ PVOID __cdecl DoDelayedEntry(void)
 }
 
 // ---------------------------------------------------------------------------
-// _internal_Execute — called by the shellcode
+// _internal_Execute — called by the bootstrap thunk
 //
 // pParams points to the MHOOK_INJECT_REMOTE_PARAMS block in the remote
 // allocation.  The function resolves the user's injection function, builds

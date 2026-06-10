@@ -3,7 +3,7 @@
 //
 // Test flow:
 //   1. Create cmd.exe with CREATE_SUSPENDED and a piped stdout.
-//   2. Inject a shellcode blob that loads the companion DLL and calls Execute().
+//   2. Inject a bootstrap-thunk blob that loads the companion DLL and calls Execute().
 //      The companion DLL installs a hook on NtTerminateProcess and resumes the
 //      main thread.
 //   3. When cmd.exe exits the hook fires, writing "MHOOK_EARLY_HOOK_OK\n" to
@@ -23,21 +23,21 @@
 #include <string>
 
 // ---------------------------------------------------------------------------
-// ShellcodeParams — data block written into the remote process immediately
-// after the shellcode bytes.
+// BootstrapThunkParams — data block written into the remote process immediately
+// after the bootstrap-thunk bytes.
 //
 // Path strings are written into the tail of the same allocation so that there
 // is no MAX_PATH limitation.  CompanionPath.Buffer and MhookPath.Buffer are
 // set to their remote addresses before WriteProcessMemory is called.
 //
-// Layout (must match the EQU constants in shellcode_x64.asm / shellcode_x86.asm)
+// Layout (must match the EQU constants in uninit_test_bootstrap_thunk_x64.asm / _x86.asm)
 // ---------------------------------------------------------------------------
 
 typedef NTSTATUS (NTAPI  *LdrLoadDllFn)(PWSTR, PULONG, PUNICODE_STRING, PHANDLE);
 typedef void     (__cdecl *ExecuteFn)(HANDLE);
 
 #pragma pack(push, 1)
-struct ShellcodeParams {
+struct BootstrapThunkParams {
     LdrLoadDllFn    LdrLoadDll;           // fn pointer  8 / 4
     UNICODE_STRING  CompanionPath;        // 16 / 8
     HANDLE          CompanionHandle;      // 8 / 4
@@ -52,33 +52,33 @@ struct ShellcodeParams {
 
 // Compile-time layout assertions — must match the EQU constants in the .asm files.
 #ifdef _M_X64
-static_assert(offsetof(ShellcodeParams, LdrLoadDll)      ==  0, "layout");
-static_assert(offsetof(ShellcodeParams, CompanionPath)   ==  8, "layout");
-static_assert(offsetof(ShellcodeParams, CompanionHandle) == 24, "layout");
-static_assert(offsetof(ShellcodeParams, ExecuteOffset)   == 32, "layout");
-static_assert(offsetof(ShellcodeParams, IsDynamic)       == 40, "layout");
-static_assert(offsetof(ShellcodeParams, MhookPath)       == 48, "layout");
-static_assert(offsetof(ShellcodeParams, MhookHandle)          == 64, "layout");
-static_assert(offsetof(ShellcodeParams, LdrCompanionStatus)   == 72, "layout");
-static_assert(sizeof(ShellcodeParams)                         == 76, "layout");
+static_assert(offsetof(BootstrapThunkParams, LdrLoadDll)      ==  0, "layout");
+static_assert(offsetof(BootstrapThunkParams, CompanionPath)   ==  8, "layout");
+static_assert(offsetof(BootstrapThunkParams, CompanionHandle) == 24, "layout");
+static_assert(offsetof(BootstrapThunkParams, ExecuteOffset)   == 32, "layout");
+static_assert(offsetof(BootstrapThunkParams, IsDynamic)       == 40, "layout");
+static_assert(offsetof(BootstrapThunkParams, MhookPath)       == 48, "layout");
+static_assert(offsetof(BootstrapThunkParams, MhookHandle)          == 64, "layout");
+static_assert(offsetof(BootstrapThunkParams, LdrCompanionStatus)   == 72, "layout");
+static_assert(sizeof(BootstrapThunkParams)                         == 76, "layout");
 #else
-static_assert(offsetof(ShellcodeParams, LdrLoadDll)      ==  0, "layout");
-static_assert(offsetof(ShellcodeParams, CompanionPath)   ==  4, "layout");
-static_assert(offsetof(ShellcodeParams, CompanionHandle) == 12, "layout");
-static_assert(offsetof(ShellcodeParams, ExecuteOffset)   == 16, "layout");
-static_assert(offsetof(ShellcodeParams, IsDynamic)       == 20, "layout");
-static_assert(offsetof(ShellcodeParams, MhookPath)       == 28, "layout");
-static_assert(offsetof(ShellcodeParams, MhookHandle)     == 36, "layout");
-static_assert(offsetof(ShellcodeParams, LdrCompanionStatus) == 40, "layout");
-static_assert(sizeof(ShellcodeParams)                    == 44, "layout");
+static_assert(offsetof(BootstrapThunkParams, LdrLoadDll)      ==  0, "layout");
+static_assert(offsetof(BootstrapThunkParams, CompanionPath)   ==  4, "layout");
+static_assert(offsetof(BootstrapThunkParams, CompanionHandle) == 12, "layout");
+static_assert(offsetof(BootstrapThunkParams, ExecuteOffset)   == 16, "layout");
+static_assert(offsetof(BootstrapThunkParams, IsDynamic)       == 20, "layout");
+static_assert(offsetof(BootstrapThunkParams, MhookPath)       == 28, "layout");
+static_assert(offsetof(BootstrapThunkParams, MhookHandle)     == 36, "layout");
+static_assert(offsetof(BootstrapThunkParams, LdrCompanionStatus) == 40, "layout");
+static_assert(sizeof(BootstrapThunkParams)                    == 44, "layout");
 #endif
 
 // ---------------------------------------------------------------------------
-// Shellcode entry point and sentinel label defined in the .asm files.
+// Bootstrap-thunk entry point and sentinel label defined in the .asm files.
 // ---------------------------------------------------------------------------
 
-extern "C" void ShellcodeEntry();
-extern "C" void ShellcodeEnd();
+extern "C" void BootstrapThunkEntry();
+extern "C" void BootstrapThunkEnd();
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -243,13 +243,13 @@ TEST(MhookTest, UninitializedProcess_HookFiresBeforeInit)
 
     // --- Build the remote memory layout ---
     //
-    //   [shellcode bytes]                   (codeSize)
-    //   [ShellcodeParams]                   (sizeof ShellcodeParams)
+    //   [bootstrap-thunk bytes]             (codeSize)
+    //   [BootstrapThunkParams]                   (sizeof BootstrapThunkParams)
     //   [companion DLL path as WCHARs]      (companionBytes)
     //   [mhook DLL path as WCHARs]          (mhookBytes, only if isDynamic)
     //
-    SIZE_T codeSize       = (SIZE_T)((BYTE*)ShellcodeEnd - (BYTE*)ShellcodeEntry);
-    SIZE_T paramsSize     = sizeof(ShellcodeParams);
+    SIZE_T codeSize       = (SIZE_T)((BYTE*)BootstrapThunkEnd - (BYTE*)BootstrapThunkEntry);
+    SIZE_T paramsSize     = sizeof(BootstrapThunkParams);
     SIZE_T companionBytes = (companionPath.size() + 1) * sizeof(WCHAR);
     SIZE_T mhookBytes     = isDynamic ? (mhookPath.size() + 1) * sizeof(WCHAR) : 0;
 
@@ -272,8 +272,8 @@ TEST(MhookTest, UninitializedProcess_HookFiresBeforeInit)
                                     ? (PWSTR)((BYTE*)remoteCompanionBuf + companionBytes)
                                     : NULL;
 
-    // --- Fill in ShellcodeParams ---
-    ShellcodeParams params = {};
+    // --- Fill in BootstrapThunkParams ---
+    BootstrapThunkParams params = {};
     params.LdrLoadDll    = remoteLdrLoadDll;
     params.ExecuteOffset = executeOffset;
     params.IsDynamic     = isDynamic ? 1u : 0u;
@@ -291,7 +291,7 @@ TEST(MhookTest, UninitializedProcess_HookFiresBeforeInit)
     // --- Write everything into the remote process ---
     SIZE_T written;
     ASSERT_TRUE(WriteProcessMemory(pi.hProcess, remoteCode,
-                                   (LPCVOID)ShellcodeEntry, codeSize, &written));
+                                   (LPCVOID)BootstrapThunkEntry, codeSize, &written));
     ASSERT_TRUE(WriteProcessMemory(pi.hProcess, remoteParamsBytes,
                                    &params, paramsSize, &written));
     ASSERT_TRUE(WriteProcessMemory(pi.hProcess, remoteCompanionBuf,
@@ -316,11 +316,11 @@ TEST(MhookTest, UninitializedProcess_HookFiresBeforeInit)
     NTSTATUS ldrStatus = 0xDEADDEAD;
     SIZE_T bytesRead = 0;
     ReadProcessMemory(pi.hProcess,
-                      (LPCVOID)(remoteParamsBytes + offsetof(ShellcodeParams, CompanionHandle)),
+                      (LPCVOID)(remoteParamsBytes + offsetof(BootstrapThunkParams, CompanionHandle)),
                       &remoteCompanionHandle, sizeof(remoteCompanionHandle), &bytesRead);
 #ifdef _M_X64
     ReadProcessMemory(pi.hProcess,
-                      (LPCVOID)(remoteParamsBytes + offsetof(ShellcodeParams, LdrCompanionStatus)),
+                      (LPCVOID)(remoteParamsBytes + offsetof(BootstrapThunkParams, LdrCompanionStatus)),
                       &ldrStatus, sizeof(ldrStatus), &bytesRead);
 #endif
 

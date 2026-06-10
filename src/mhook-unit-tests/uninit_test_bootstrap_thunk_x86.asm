@@ -1,9 +1,9 @@
-; uninit_test_shellcode_x86.asm — remote-thread entry point for x86 injection.
+; uninit_test_bootstrap_thunk_x86.asm — remote-thread entry point for x86 injection.
 ;
-; Called as:  DWORD WINAPI ShellcodeEntry(LPVOID lpParam)  (__stdcall)
-;   [EBP+8] = pointer to ShellcodeParams (see uninit_test.cpp)
+; Called as:  DWORD WINAPI BootstrapThunkEntry(LPVOID lpParam)  (__stdcall)
+;   [EBP+8] = pointer to BootstrapThunkParams (see uninit_test.cpp)
 ;
-; ShellcodeParams field offsets (x86) — must match the C struct in uninit_test.cpp.
+; BootstrapThunkParams field offsets (x86) — must match the C struct in uninit_test.cpp.
 ; Path strings are written AFTER the struct in the same remote allocation;
 ; UNICODE_STRING.Buffer pointers are set by the test to those remote addresses.
 ; UNICODE_STRING is 8 bytes on x86 (2+2+4).  ULONG_PTR / HANDLE = 4 bytes.
@@ -17,7 +17,7 @@ PARAM__pad              EQU 24          ; ULONG (4, alignment pad)
 PARAM_MhookPath         EQU 28          ; UNICODE_STRING (8)
 PARAM_MhookHandle       EQU 36          ; HANDLE (4)     = 28+8
 
-        PUBLIC ShellcodeEnd
+        PUBLIC BootstrapThunkEnd
 
 .686
 .model flat, C      ; 'C' language: MASM adds '_' prefix to all PROC names
@@ -25,12 +25,12 @@ PARAM_MhookHandle       EQU 36          ; HANDLE (4)     = 28+8
 .code
 
 ; ---------------------------------------------------------------------------
-ShellcodeEntry PROC
+BootstrapThunkEntry PROC
         push    ebp
         mov     ebp, esp
         push    ebx
 
-        mov     ebx, dword ptr [ebp+8]  ; ShellcodeParams*
+        mov     ebx, dword ptr [ebp+8]  ; BootstrapThunkParams*
 
         ; --- Load companion DLL ---
         lea     eax, [ebx + PARAM_CompanionHandle]
@@ -69,10 +69,10 @@ CallExecute:
         pop     ebp
         ret     4                       ; __stdcall: clean lpParam (4 bytes)
 
-; Sentinel: immediately follows ShellcodeEntry so that
-; (ShellcodeEnd - ShellcodeEntry) gives the code size.
-ShellcodeEnd::
+; Sentinel: immediately follows BootstrapThunkEntry so that
+; (BootstrapThunkEnd - BootstrapThunkEntry) gives the code size.
+BootstrapThunkEnd::
         nop
-ShellcodeEntry ENDP
+BootstrapThunkEntry ENDP
 
 END

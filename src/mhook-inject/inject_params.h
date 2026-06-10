@@ -34,7 +34,7 @@ typedef NTSTATUS (NTAPI *LdrLoadDllFn)(
 // MhookInjectRemoteParams
 //
 // Written by Mhook_Inject into the remote process immediately after the
-// shellcode bytes.  Read and updated by _internal_Execute.
+// bootstrap-thunk bytes.  Read and updated by _internal_Execute.
 //
 // Layout (pack=1, see static_asserts in mhook_inject.cpp):
 //
@@ -77,18 +77,18 @@ typedef struct _MHOOK_INJECT_REMOTE_PARAMS {
     NTSTATUS        InjectStatus;         // from exec   4
     NTSTATUS        LdrCompanionStatus;   // diagnostic  4
 #ifdef _M_X64
-    /* x64 shellcode-frame unwind registration.
+    /* x64 bootstrap-thunk-frame unwind registration.
      * Filled by the host (mhook_inject.cpp) before the remote thread starts.
-     * ShellcodeRF[3] holds a RUNTIME_FUNCTION (BeginAddress / EndAddress /
-     * UnwindData, all relative to ShellcodeBase).  ShellcodeUI[8] holds the
-     * UNWIND_INFO bytes for InjectShellcodeEntry's prolog.
-     * RtlDeleteFunctionTable is called by the shellcode on every exit path so
+     * BootstrapThunkRF[3] holds a RUNTIME_FUNCTION (BeginAddress / EndAddress /
+     * UnwindData, all relative to BootstrapThunkBase).  BootstrapThunkUI[8] holds the
+     * UNWIND_INFO bytes for InjectBootstrapThunkEntry's prolog.
+     * RtlDeleteFunctionTable is called by the bootstrap thunk on every exit path so
      * the registration is cleaned up before the host frees the allocation. */
     PVOID           RtlAddFunctionTable;     // @136 (8) remote ntdll!RtlAddFunctionTable
     PVOID           RtlDeleteFunctionTable;  // @144 (8) remote ntdll!RtlDeleteFunctionTable
-    ULONG64         ShellcodeBase;           // @152 (8) = rCode (remote allocation base)
-    ULONG           ShellcodeRF[3];          // @160 (12) RUNTIME_FUNCTION {Begin,End,UnwindData}
-    BYTE            ShellcodeUI[8];          // @172 (8)  UNWIND_INFO + 2 unwind codes
+    ULONG64         BootstrapThunkBase;           // @152 (8) = rCode (remote allocation base)
+    ULONG           BootstrapThunkRF[3];          // @160 (12) RUNTIME_FUNCTION {Begin,End,UnwindData}
+    BYTE            BootstrapThunkUI[8];          // @172 (8)  UNWIND_INFO + 2 unwind codes
     // sizeof = 180
 #endif
 } MHOOK_INJECT_REMOTE_PARAMS;
@@ -119,9 +119,9 @@ INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, InjectStatus)         
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, LdrCompanionStatus)    == 132, "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, RtlAddFunctionTable)   == 136, "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, RtlDeleteFunctionTable)== 144, "layout");
-INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ShellcodeBase)         == 152, "layout");
-INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ShellcodeRF)           == 160, "layout");
-INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ShellcodeUI)           == 172, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, BootstrapThunkBase)         == 152, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, BootstrapThunkRF)           == 160, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, BootstrapThunkUI)           == 172, "layout");
 INJECT_STATIC_ASSERT(sizeof(MHOOK_INJECT_REMOTE_PARAMS)                          == 180, "layout");
 #else
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CompanionPath)      ==  4,  "layout");

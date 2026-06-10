@@ -1,6 +1,6 @@
-; inject_shellcode_x64.asm — remote-thread entry point for x64 injection.
+; inject_bootstrap_thunk_x64.asm — remote-thread entry point for x64 injection.
 ;
-; Called as:  DWORD WINAPI InjectShellcodeEntry(LPVOID lpParam)
+; Called as:  DWORD WINAPI InjectBootstrapThunkEntry(LPVOID lpParam)
 ;   RCX = pointer to MHOOK_INJECT_REMOTE_PARAMS (see inject_params.h)
 ;
 ; MHOOK_INJECT_REMOTE_PARAMS field offsets (x64) — must match inject_params.h.
@@ -23,15 +23,15 @@ PARAM_InjectStatus           EQU 128         ; NTSTATUS (4)
 PARAM_LdrCompanionStatus     EQU 132         ; NTSTATUS (4)
 PARAM_RtlAddFunctionTable    EQU 136         ; PVOID (8)
 PARAM_RtlDeleteFunctionTable EQU 144         ; PVOID (8)
-PARAM_ShellcodeBase          EQU 152         ; ULONG64 (8)
-PARAM_ShellcodeRF            EQU 160         ; RUNTIME_FUNCTION [3 DWORDs = 12 bytes]
+PARAM_BootstrapThunkBase          EQU 152         ; ULONG64 (8)
+PARAM_BootstrapThunkRF            EQU 160         ; RUNTIME_FUNCTION [3 DWORDs = 12 bytes]
 
-        PUBLIC InjectShellcodeEnd
+        PUBLIC InjectBootstrapThunkEnd
 
 .code
 
 ; ---------------------------------------------------------------------------
-InjectShellcodeEntry PROC
+InjectBootstrapThunkEntry PROC
         push    rbx
         ; x64 ABI: RSP is 8 (mod 16) at entry; after "push rbx" it is 0 (mod 16),
         ; so the allocation MUST be a multiple of 16 to keep RSP 16-aligned at the
@@ -43,14 +43,14 @@ InjectShellcodeEntry PROC
         mov     rbx, rcx            ; save MHOOK_INJECT_REMOTE_PARAMS*
 
         ; --- Register unwind info for this frame so that x64 exception
-        ;     dispatch and WER can unwind through the shellcode frame. ---
+        ;     dispatch and WER can unwind through the bootstrap-thunk frame. ---
         ; RtlAddFunctionTable(FunctionTable, EntryCount, BaseAddress)
         mov     rax, qword ptr [rbx + PARAM_RtlAddFunctionTable]
         test    rax, rax
         jz      LoadCompanion
-        lea     rcx, [rbx + PARAM_ShellcodeRF]              ; FunctionTable
+        lea     rcx, [rbx + PARAM_BootstrapThunkRF]              ; FunctionTable
         mov     edx, 1                                       ; EntryCount
-        mov     r8,  qword ptr [rbx + PARAM_ShellcodeBase]  ; BaseAddress
+        mov     r8,  qword ptr [rbx + PARAM_BootstrapThunkBase]  ; BaseAddress
         call    rax
         ; ignore BOOLEAN return value in rax
 
@@ -94,7 +94,7 @@ CallExecute:
         ; rax = NTSTATUS from _internal_Execute; fall through to Epilog
 
 Epilog:
-        ; --- Deregister the shellcode unwind info before the host frees the
+        ; --- Deregister the bootstrap-thunk unwind info before the host frees the
         ;     allocation.  Safe no-op if RtlAddFunctionTable was skipped or
         ;     returned FALSE. ---
         ;
@@ -109,7 +109,7 @@ Epilog:
         mov     rax, qword ptr [rbx + PARAM_RtlDeleteFunctionTable]
         test    rax, rax
         jz      EpilogDone
-        lea     rcx, [rbx + PARAM_ShellcodeRF]              ; same ptr as Add
+        lea     rcx, [rbx + PARAM_BootstrapThunkRF]              ; same ptr as Add
         call    rax
 EpilogDone:
         movsxd  rax, dword ptr [rbx + PARAM_InjectStatus]   ; reload NTSTATUS
@@ -117,10 +117,10 @@ EpilogDone:
         pop     rbx
         ret
 
-; Sentinel: immediately follows InjectShellcodeEntry so that
-; (InjectShellcodeEnd - InjectShellcodeEntry) gives the code size.
-InjectShellcodeEnd::
+; Sentinel: immediately follows InjectBootstrapThunkEntry so that
+; (InjectBootstrapThunkEnd - InjectBootstrapThunkEntry) gives the code size.
+InjectBootstrapThunkEnd::
         nop
-InjectShellcodeEntry ENDP
+InjectBootstrapThunkEntry ENDP
 
 END

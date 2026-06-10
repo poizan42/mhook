@@ -1,6 +1,6 @@
 // inject.c — companion DLL for the uninitialized-process hook test.
 //
-// Loaded by shellcode injected into a suspended process before the main
+// Loaded by the bootstrap thunk injected into a suspended process before the main
 // thread has executed a single instruction.  Imports only from ntdll.dll.
 //
 // Static configurations  (Debug, Release):       mhook statically linked.
@@ -83,11 +83,11 @@ static void ResumeOtherThreads(void)
 }
 
 // ---------------------------------------------------------------------------
-// Execute — entry point called by the injected shellcode
+// Execute — entry point called by the injected bootstrap thunk
 //
 // hMhook:  handle to loaded mhook.dll (dynamic builds only); NULL for static.
 //
-// Called __cdecl so the shellcode does not need to know how many bytes of
+// Called __cdecl so the bootstrap thunk does not need to know how many bytes of
 // argument to clean from the stack (on x86 the caller cleans).
 // ---------------------------------------------------------------------------
 
