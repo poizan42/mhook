@@ -80,7 +80,7 @@ On `SetHook`, the library: suspends all other threads (via `NtGetNextThread` + `
 
 `inject_shellcode_x86.asm` / `inject_entry_thunk_x64.asm` are the shellcode stubs written into the remote process.
 
-**`DELAY_UNTIL_INIT` flow:** when set, `Mhook_Inject` hooks the process entry point instead of calling the injection function immediately. `inject_entry.c` polls `PEB_LDR_DATA.Initialized` — once true (all `DllMain` handlers have run), it calls the user function before the entry point executes.
+**`DELAY_UNTIL_INIT` flow:** when set, the injection function is deferred until the target has finished loader initialisation, by hooking the process **entry point** so the user function runs on the target's *main* thread (with Win32 available) just before the entry point executes. The delayed-vs-immediate decision is **caller-authoritative**: `Mhook_Inject` reads the target's `PEB_LDR_DATA.Initialized` *before* creating the injection thread and passes `MHOOK_REMOTE_FLAG_TARGET_UNINITIALIZED` in the remote params; `_internal_Execute` trusts that bit (falling back to its own `IsProcessInitialized()` only if the caller couldn't read the state). This indirection exists because **creating the injection thread itself runs loader init in the target** (see Invariants), so an in-target `IsProcessInitialized()` check at `_internal_Execute` time is unreliable.
 
 **Static vs Dynamic builds:**
 - Static (`mhook.lib` + `mhook_inject.lib`): the companion DLL must re-export `_internal_Execute` and link both libs.
@@ -109,3 +109,18 @@ Instruction-length decoder (originally by Matt Conover) for x86 and x64. Used by
 - `mhook_inject_test_companion/` — companion DLL used by `MhookInjectTest` (exercises `Mhook_Inject` end-to-end).
 - `mhook_test_uninitialized_inject/` — companion for the `UninitializedProcess_HookFiresBeforeInit` test, which injects into a still-suspended `cmd.exe` before its main thread runs a single instruction.
 - `mhook_inject_win32_test_companion/` — Win32-linked companion for testing the `DELAY_UNTIL_INIT` path. This should behave like what a consumer would normally generate for a dll - i.e. debug builds links dynamic debug crt, has security features enabled etc.
+
+## Invariants & gotchas (non-obvious, easy to break)
+
+### x64 shellcode stack alignment
+The remote-thread shellcodes (`src/mhook-inject/inject_shellcode_x64.asm` and `src/mhook-unit-tests/uninit_test_shellcode_x64.asm`) **must keep RSP 16-byte aligned at every `call`**. Per the x64 ABI, RSP ≡ 8 (mod 16) at `PROC` entry; after `push rbx` it is ≡ 0, so the prologue's `sub rsp, N` must use **N ≡ 0 (mod 16)** — use `0x20` (the 32-byte shadow space), not `0x28`. A misaligned stack makes any 16-byte-aligned local in a callee (notably the `CONTEXT` used by `NtGetContextThread` in `SuspendOneThread`) fault with `STATUS_DATATYPE_MISALIGNMENT`, with confusing downstream symptoms. Three things must stay in sync: the prologue `sub rsp`, the matching epilogue `add rsp`, and — for `inject_shellcode_x64.asm` — the hand-encoded `UNWIND_INFO` (`rp.ShellcodeUI[...]` / `UWOP_ALLOC_SMALL`) in `mhook_inject.cpp`.
+
+### Injecting a runnable thread initialises the target process
+Creating a thread with `NtCreateThreadEx` in a still-suspended target runs `ntdll!LdrInitializeThunk → LdrpInitializeProcess` as a side effect (whichever thread runs user code first wins the loader-init CAS), flipping `PEB_LDR_DATA.Initialized` to TRUE before `_internal_Execute` runs. This is why the `DELAY_UNTIL_INIT` decision is made caller-side (above). Background on the loader/thread mechanics is captured in `G:\projects-ext\claude-notes\ntapi\` (`process-initialization.md`, `NtCreateThreadEx.md`).
+
+### Thread suspend/resume contract (`mhook.cpp`)
+- `SuspendOtherThreads` walks threads with `NtGetNextThread`; the enumeration cursor must **never** be reset to `NULL` mid-walk (passing `NULL` restarts from the first thread → infinite re-suspension). Keep the last-returned handle as the cursor.
+- `SuspendOneThread` must **resume on every failure path** (it suspends first, then checks the IP) — never return failure with the thread left suspended, or the target's main thread can be stranded.
+
+### Debugging the injected path
+Attaching a user-mode debugger to the target sets `PEB.BeingDebugged`, which switches ntdll to the debug heap and serialises the loader differently — this can mask timing-dependent injection bugs (heisenbugs). For debugger-free diagnostics from inside the target, write to the target's stdout via `RtlCurrentPeb()->ProcessParameters->StandardOutput` (the inject tests capture it and print it in the assertion's `Output: [...]`). `ODPRINTF` (debug builds) routes to `vDbgPrintEx` and only shows under a debugger.
