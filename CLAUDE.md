@@ -86,6 +86,8 @@ On `SetHook`, the library: suspends all other threads (via `NtGetNextThread` + `
 - Static (`mhook.lib` + `mhook_inject.lib`): the companion DLL must re-export `_internal_Execute` and link both libs.
 - Dynamic (`mhook.dll` + `mhook_inject.dll`): `mhook_inject.dll` is the companion; the user's DLL only needs to export the injection function and import from ntdll.
 
+**Access guard & error codes:** `Mhook_Inject` deliberately requires a `PROCESS_ALL_ACCESS` target handle (a basic anti-exploitation guard — it reads the handle's *granted* access via `NtQueryObject`; a `static_assert` pins `PROCESS_ALL_ACCESS == 0x1FFFFF` so a future SDK change forces a manual decision). It returns the public `MHOOK_INJECT_E_*` HRESULTs (declared in `mhook_inject.h`), which use the Customer bit (`0xA00000xx`). Dynamic builds also embed a message-table resource so those codes are `FormatMessage`-able from `mhook_inject.dll` (see Invariants).
+
 ### `MhookInjectRemoteParams` struct (`src/mhook-inject/inject_params.h`)
 
 This `#pragma pack(1)` struct is written into the remote process immediately after the shellcode. Its layout is fixed and verified with `static_assert` offset checks for both x64 (180 bytes) and x86 (80 bytes). Any change to field order must keep all offset assertions passing.
@@ -124,3 +126,6 @@ Creating a thread with `NtCreateThreadEx` in a still-suspended target runs `ntdl
 
 ### Debugging the injected path
 Attaching a user-mode debugger to the target sets `PEB.BeingDebugged`, which switches ntdll to the debug heap and serialises the loader differently — this can mask timing-dependent injection bugs (heisenbugs). For debugger-free diagnostics from inside the target, write to the target's stdout via `RtlCurrentPeb()->ProcessParameters->StandardOutput` (the inject tests capture it and print it in the assertion's `Output: [...]`). `ODPRINTF` (debug builds) routes to `vDbgPrintEx` and only shows under a debugger.
+
+### Error-message resource must stay in sync (`mhook_inject_messages.mc`)
+The `MHOOK_INJECT_E_*` strings are an `RT_MESSAGETABLE` compiled from `mhook_inject_messages.mc` and linked into `mhook_inject.dll` (dynamic configs only, via a `<CustomBuild>` + `<ResourceCompile>` in `mhook_inject.vcxproj`; static `.lib` configs carry no resource). It **must** be compiled with `mc -c` — that Customer-bit flag is what makes the generated message IDs equal the `0xA00000xx` HRESULTs (mc's docs call it "bit 28", but it actually sets bit 29). The `.mc`'s `MessageId` values (`0x1..0x5`) and the `MHOOK_INJECT_E_*` defines in `mhook_inject.h` are hand-maintained and must stay in lockstep; the `mc`-generated header is intentionally not `#include`d anywhere (`mhook_inject.h` is the single source of truth).
