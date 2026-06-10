@@ -372,10 +372,11 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
             g_DelayedCtx.UserData = copy;
         }
 
-        /* x64: wrap in __try/__except so a crash surfaces as 0xDE00'00NN
-         * (step 1-4) rather than a raw AV.  Not used on x86: __except_handler3/4
-         * and __load_config_used are CRT symbols unavailable in ntdll-only DLLs. */
-#ifdef _M_X64
+        /* Wrap hook installation in __try/__except so a crash surfaces as a clean
+         * 0xDE00'00NN status (step 1-4) rather than a raw AV.  The language SEH
+         * handler is ntdll's __C_specific_handler on x64, and our own
+         * _except_handler3 + SafeSEH load-config (mhook_seh3.lib) on x86 — both
+         * keep the binary ntdll-only and (x86) SafeSEH-aware. */
         pParams->InjectStatus = 1;
         __try {
             PVOID ep = GetProcessEntryPoint();
@@ -394,15 +395,6 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
                              pParams->CallerThread, pParams->ApcRoutine, pParams->ApcContext);
             FreeAllocationAndExitThread(pParams, err);
         }
-#else
-        {
-            PVOID ep = GetProcessEntryPoint();
-            if (ep && pSetHook && pUnhook) {
-                g_TrueEntryPoint = (EntryPointFn)ep;
-                pSetHook((PVOID *)&g_TrueEntryPoint, DelayedEntryThunk);
-            }
-        }
-#endif
 
         /* Race check (fallback path only): the process may have finished
            initialising between the needDelay check above and the hook
@@ -451,3 +443,24 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
                      pParams->CallerThread, pParams->ApcRoutine, pParams->ApcContext);
     FreeAllocationAndExitThread(pParams, pParams->InjectStatus);
 }
+
+#ifdef MHOOK_INJECT_DYNAMIC
+// ---------------------------------------------------------------------------
+// MhookInjectSehSelfTest — runtime proof that __try/__except works inside this
+// ntdll-only module (x86: via the self-provided _except_handler3 + SafeSEH
+// load-config from mhook_seh3.lib; x64: via ntdll's __C_specific_handler).
+// Deliberately faults and reports whether the handler caught it: returns 1 if
+// the __except block ran, 0 otherwise.  Exported from mhook_inject.dll for the
+// unit tests; present in dynamic builds only (exported via inject_entry.def).
+// ---------------------------------------------------------------------------
+int __cdecl MhookInjectSehSelfTest(void)
+{
+    volatile int caught = 0;
+    __try {
+        *(volatile int *)0 = 1;   /* access violation */
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        caught = 1;
+    }
+    return caught;
+}
+#endif

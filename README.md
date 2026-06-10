@@ -297,6 +297,18 @@ a DLL that is loaded into the target process.  That DLL must:
 2. **Link `mhook.lib`** — provides `Mhook_SetHook`/`Mhook_Unhook`, which
    `_internal_Execute` references directly in static builds.
 
+   **x86 only:** also link **`mhook_seh3.lib`** *unless* your DLL already links a
+   CRT / WDK runtime that provides `_except_handler3`.  `_internal_Execute` uses
+   `__try`/`__except`, and a CRT-free x86 image has no language SEH handler or
+   SafeSEH load-config; `mhook_seh3.lib` supplies a minimal `_except_handler3` (its
+   only import is `ntdll!RtlUnwind`) plus the `_load_config_used` that makes the
+   image SafeSEH-aware.  Build the file `inject_entry.c` of your own code, if any
+   uses `__try`, **without** `/GL` on x86 (under `/GL` the compiler emits
+   `_except_handler4`, which `mhook_seh3` does not provide).  x64 needs none of
+   this (it uses ntdll's `__C_specific_handler` via `ntdll_extra.lib`).  If your
+   DLL uses `__finally` or nested SEH, provide your own full `_except_handler3`
+   (or link a CRT) instead — the bundled one is minimal.
+
 3. **Re-export `_internal_Execute`** — the bootstrap thunk locates and calls this
    symbol in the companion DLL.  Add it to the DLL's `.def` file:
 

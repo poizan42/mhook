@@ -1,3 +1,4 @@
 EXPORTS
     _internal_Execute
     Mhook_Inject
+    MhookInjectSehSelfTest

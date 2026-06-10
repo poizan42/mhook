@@ -433,6 +433,15 @@
     </ProjectReference>
   </ItemGroup>
 
+  <!-- x86 static: inject_entry.c's __try needs _except_handler3 + SafeSEH
+       load-config, which ntdll-only x86 binaries lack.  mhook_seh3 supplies them
+       (x64 uses ntdll's __C_specific_handler, so it's not needed there). -->
+  <ItemGroup Condition="('$(Configuration)'=='Debug' or '$(Configuration)'=='Release') and '$(Platform)'=='Win32'">
+    <ProjectReference Include="..\mhook_seh3\mhook_seh3.vcxproj">
+      <Project>{7C9E0F2A-3B4D-4E5F-9A8B-1C2D3E4F5A6B}</Project>
+    </ProjectReference>
+  </ItemGroup>
+
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets" />
 </Project>

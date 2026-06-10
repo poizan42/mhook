@@ -366,7 +366,14 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="mhook_inject.cpp" />
-    <ClCompile Include="inject_entry.c" />
+    <ClCompile Include="inject_entry.c">
+      <!-- Force a non-LTCG object on x86 so the compiler emits _except_handler3
+           (provided by mhook_seh3.lib).  Under /GL (Release WholeProgramOptimization)
+           the x86 compiler emits the /GS-cookie _except_handler4 even with /GS-,
+           which would require the full GS-cookie SEH machinery.  x64 is unaffected
+           (table-based SEH via ntdll's __C_specific_handler). -->
+      <WholeProgramOptimization Condition="'$(Platform)'=='Win32'">false</WholeProgramOptimization>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <!-- x64 bootstrap thunk: only assembled for x64 targets -->
@@ -420,6 +427,16 @@
     <ProjectReference Include="..\libmhook.vcxproj"
                       Condition="'$(ConfigurationType)'=='StaticLibrary'">
       <Project>{9AF4E83D-3670-44C8-84B9-54FFD4AFFF21}</Project>
+    </ProjectReference>
+    <!-- mhook_seh3 (x86 only): _except_handler3 + SafeSEH load-config for the x86
+         __try in inject_entry.c.  For the dynamic mhook_inject.dll it auto-links
+         into the DLL; for the static .lib it only sets build order (NOT merged into
+         mhook_inject.lib — CombineWithNtdllExtra merges only ntdll_extra.lib), so a
+         static consumer's own CRT/WDK _except_handler3 is never overridden.  x86
+         static consumers that lack a runtime link mhook_seh3.lib themselves. -->
+    <ProjectReference Include="..\mhook_seh3\mhook_seh3.vcxproj"
+                      Condition="'$(Platform)'=='Win32'">
+      <Project>{7C9E0F2A-3B4D-4E5F-9A8B-1C2D3E4F5A6B}</Project>
     </ProjectReference>
   </ItemGroup>
 

@@ -99,7 +99,7 @@ This `#pragma pack(1)` struct is written into the remote process immediately aft
 
 ### `ntdll_extra_stub` (`src/ntdll_extra_stub/`)
 
-Several ntdll exports are absent from the Windows SDK's `ntdll.lib` (`NtGetNextThread`, `LdrLoadDll`, `LdrGetProcedureAddress`, `_snprintf`, `_vsnprintf`, `memset`, `memcpy`, `memmove`, `memcmp`). This stub DLL's `.def` carries `LIBRARY ntdll.dll`, making the linker generate import stubs that resolve to the real system DLL. These stubs are bundled into the static `mhook.lib` at build time.
+Several ntdll exports the library uses are absent from the Windows SDK's `ntdll.lib` — loader/thread/memory primitives (`NtGetNextThread`, `LdrLoadDll`, `LdrGetProcedureAddress`, `_snprintf`/`_vsnprintf`, `memset`/`memcpy`/`memmove`/`memcmp`) plus the object/event primitives the async-injection path needs (`NtCreateEvent`, `NtSetEvent`, `NtDuplicateObject`, `NtQueueApcThread`, `NtTerminateThread`, `NtQueryObject`). This stub project's `.def` carries `LIBRARY ntdll.dll`, so the linker generates import stubs that resolve to the real system DLL. The def is **per-arch**: `ntdll_extra_stub_x64.def` additionally exports **`__C_specific_handler`** — the x64 SEH language handler that x64 ntdll exports but the SDK lib omits (its x86 analogue can't come from ntdll and is hand-written in `mhook_seh3`). The stub's import lib (`ntdll_extra.lib`) is merged into the static `mhook.lib` *and* `mhook_inject.lib` at build time via each project's `CombineWithNtdllExtra` `Lib` step.
 
 ### `src/nt_defs.h`
 
@@ -110,6 +110,10 @@ Replaces `<windows.h>` throughout the library. Includes only `<minwindef.h>` and
 ### `disasm-lib` (`src/disasm-lib/`)
 
 Instruction-length decoder (originally by Matt Conover) for x86 and x64. Used by the hook engine to find safe instruction boundaries when building the trampoline — copies whole instructions, never splits one mid-byte.
+
+### `mhook_seh3` (`src/mhook_seh3/`) — x86 SEH support
+
+x86 frame-based `__try`/`__except` needs a language handler (`_except_handler3` under `/GS-`) plus a `_load_config_used` for the SafeSEH handler table — both normally supplied by the CRT, so an ntdll-only x86 binary lacks them. This static lib provides them: a hand-written `_except_handler3` (`except_handler3_x86.asm`, its only dependency is `ntdll!RtlUnwind`) and a `_load_config_used` (`seh3_loadcfg_x86.c`) whose `SEHandlerTable`/`SEHandlerCount` point at the linker's `__safe_se_handler_table`/`__safe_se_handler_count`. It is x86-only (the `.asm` is `Win32`-only; the `.c` body is `#if defined(_M_IX86)`, so the x64 lib is empty — x64 uses ntdll's `__C_specific_handler` via `ntdll_extra_stub`). The lib is referenced by `mhook_inject` and `mhook_inject_test_companion` (Win32 only); it auto-links into the **dynamic** `mhook_inject.dll`, and ntdll-only static consumers link it explicitly. It is deliberately **not** merged into `mhook_inject.lib` (see the invariant below).
 
 ### Test companion DLLs
 
@@ -127,6 +131,11 @@ Creating a thread with `NtCreateThreadEx` in a still-suspended target runs `ntdl
 
 ### Remote-allocation cleanup is target-owned
 Once the remote thread is created, `_internal_Execute` frees the remote allocation itself via `FreeAllocationAndExitThread` (`NtFreeVirtualMemory` + `NtTerminateThread`) on **every** exit path, in both sync and async modes; the caller frees `remoteBase` only when `NtCreateThreadEx` *failed* (gated by `remoteBaseOwned`), to avoid a double-free. Because `NtTerminateThread` bypasses the bootstrap thunk's epilog (which would otherwise call `RtlDeleteFunctionTable`), on x64 `FreeAllocationAndExitThread` must deregister the unwind entry (`RtlDeleteFunctionTable(&pParams->BootstrapThunkRF)`) **before** freeing — otherwise a dynamic-function-table entry dangles into freed memory and corrupts later exception dispatch in the target.
+
+### x86 `__try` needs `mhook_seh3` — and a non-LTCG object
+`inject_entry.c`'s hook-install `__try`/`__except` compiles on x86 only because `mhook_seh3.lib` supplies `_except_handler3` + the SafeSEH `_load_config_used` (above). Two non-obvious constraints:
+- **`/GL` (Release `WholeProgramOptimization`) makes the x86 compiler emit `_except_handler4`, not `_except_handler3`, even under `/GS-`.** `_except_handler4` would need the full GS-cookie SEH machinery, which we don't provide. So `inject_entry.c` carries a per-file `<WholeProgramOptimization Condition="'$(Platform)'=='Win32'">false</WholeProgramOptimization>` in `mhook_inject.vcxproj` to force a non-LTCG object (→ `_except_handler3`). x64 is unaffected.
+- **Do not merge `mhook_seh3` into `mhook_inject.lib`.** Our `_except_handler3` is minimal (single try-level, no `__finally`). If bundled into the static lib, a consumer linking it would have *their own* `__try` resolve to our minimal handler (one definition per image) — silently breaking their `__finally`/nested SEH. Keeping it a separate opt-in lib means consumers with a CRT/WDK runtime use their own full handler, and only no-runtime consumers link ours. (Linking it would not cause `LNK2005` — the WDK's copies are library members and lose the first-pull — but the override is a semantic footgun. The `CombineWithNtdllExtra` `Lib` step merges only `ntdll_extra.lib`.)
 
 ### Thread suspend/resume contract (`mhook.cpp`)
 - `SuspendOtherThreads` walks threads with `NtGetNextThread`; the enumeration cursor must **never** be reset to `NULL` mid-walk (passing `NULL` restarts from the first thread → infinite re-suspension). Keep the last-returned handle as the cursor.

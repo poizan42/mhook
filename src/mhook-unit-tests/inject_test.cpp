@@ -201,6 +201,24 @@ TEST(MhookInjectTest, ErrorMessagesAreFormattable)
     EXPECT_NE(wcsstr(buf, L"PROCESS_ALL_ACCESS"), nullptr)
         << "unexpected message text";
 }
+
+// Runtime proof that the inject module's __try/__except actually catches a fault.
+// The self-test lives in mhook_inject.dll, so SEH dispatch uses THAT module's
+// language handler — on x86 the self-provided _except_handler3 + SafeSEH load
+// config (mhook_seh3.lib), on x64 ntdll's __C_specific_handler — not the CRT
+// handler of this (normal-CRT) test exe.  This is the end-to-end check that the
+// ntdll-only x86 SEH support works, not merely that it links / is SafeSEH-marked.
+TEST(MhookInjectTest, InjectModuleSehCatchesFault)
+{
+    HMODULE h = GetModuleHandleW(L"mhook_inject.dll");
+    ASSERT_NE(h, nullptr) << "mhook_inject.dll not loaded (" << GetLastError() << ")";
+
+    typedef int (__cdecl *SehSelfTestFn)(void);
+    auto fn = reinterpret_cast<SehSelfTestFn>(GetProcAddress(h, "MhookInjectSehSelfTest"));
+    ASSERT_NE(fn, nullptr) << "MhookInjectSehSelfTest not exported (" << GetLastError() << ")";
+
+    EXPECT_EQ(fn(), 1) << "__except did not catch the access violation in mhook_inject.dll";
+}
 #endif
 
 // ---------------------------------------------------------------------------

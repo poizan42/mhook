@@ -252,9 +252,9 @@ $configs = @(
     [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='x64';   Config='DebugDynamic';   IsLib=$false; IsX86=$false; Exports=@();               NeedsMhook=$false }
     [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='x64';   Config='Release';        IsLib=$true;  IsX86=$false; Exports=@('Mhook_Inject'); NeedsMhook=$true  }
     [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='x64';   Config='ReleaseDynamic'; IsLib=$false; IsX86=$false; Exports=@();               NeedsMhook=$false }
-    [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='Win32'; Config='Debug';          IsLib=$true;  IsX86=$true;  Exports=@('Mhook_Inject'); NeedsMhook=$true  }
+    [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='Win32'; Config='Debug';          IsLib=$true;  IsX86=$true;  Exports=@('Mhook_Inject'); NeedsMhook=$true; NeedsSeh3=$true  }
     [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='Win32'; Config='DebugDynamic';   IsLib=$false; IsX86=$true;  Exports=@();               NeedsMhook=$false }
-    [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='Win32'; Config='Release';        IsLib=$true;  IsX86=$true;  Exports=@('Mhook_Inject'); NeedsMhook=$true  }
+    [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='Win32'; Config='Release';        IsLib=$true;  IsX86=$true;  Exports=@('Mhook_Inject'); NeedsMhook=$true; NeedsSeh3=$true  }
     [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='Win32'; Config='ReleaseDynamic'; IsLib=$false; IsX86=$true;  Exports=@();               NeedsMhook=$false }
 )
 
@@ -299,6 +299,19 @@ foreach ($cfg in $configs) {
                 continue
             }
             $extraLibs = @($mhookLib)
+        }
+
+        # x86 mhook_inject static: inject_entry.c's __try needs our self-provided
+        # _except_handler3 + SafeSEH load-config from mhook_seh3.lib (ntdll-only).
+        # (-contains short-circuits before $cfg.NeedsSeh3 under StrictMode.)
+        if (($cfg.PSObject.Properties.Name -contains 'NeedsSeh3') -and $cfg.NeedsSeh3) {
+            $seh3Lib = Join-Path $SolutionDir build artifacts mhook_seh3 "$($cfg.Arch)\$($cfg.Config)\mhook_seh3.lib"
+            if (-not (Test-Path $seh3Lib)) {
+                Write-Host "  SKIP    $label  (mhook_seh3.lib not found)"
+                $skipped++
+                continue
+            }
+            $extraLibs += $seh3Lib
         }
 
         $err = Test-LibByLinking $dumpbin $linkX64 $linkX86 $file $cfg.Arch $sdkNtdll $ntdllExtraLib `
