@@ -19,7 +19,7 @@
 // Forward declarations for the MASM entry-point thunk
 // ---------------------------------------------------------------------------
 
-// Defined in inject_entry_thunk_x64/x86.asm.  The thunk calls DoDelayedEntry
+// Defined in inject_delayed_entry_thunk_x64/x86.asm.  The thunk calls DoDelayedEntry
 // then JMPs to the returned address so no hook frame is left on the stack.
 extern void DelayedEntryThunk(void);
 

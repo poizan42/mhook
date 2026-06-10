@@ -1,4 +1,4 @@
-; inject_entry_thunk_x64.asm — entry-point hook trampoline for x64.
+; inject_delayed_entry_thunk_x64.asm — entry-point hook trampoline for x64.
 ;
 ; DelayedEntryThunk is installed as a hook on the process entry point when
 ; MHOOK_REMOTE_FLAG_DELAY_UNTIL_INIT is set and the process is not yet

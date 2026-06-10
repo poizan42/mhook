@@ -379,10 +379,10 @@
       <ExcludedFromBuild Condition="'$(Platform)'!='Win32'">true</ExcludedFromBuild>
     </MASM>
     <!-- Delayed-entry thunks: guarantee JMP (not call) to original entry point -->
-    <MASM Include="inject_entry_thunk_x64.asm">
+    <MASM Include="inject_delayed_entry_thunk_x64.asm">
       <ExcludedFromBuild Condition="'$(Platform)'!='x64'">true</ExcludedFromBuild>
     </MASM>
-    <MASM Include="inject_entry_thunk_x86.asm">
+    <MASM Include="inject_delayed_entry_thunk_x86.asm">
       <UseSafeExceptionHandlers>true</UseSafeExceptionHandlers>
       <ExcludedFromBuild Condition="'$(Platform)'!='Win32'">true</ExcludedFromBuild>
     </MASM>

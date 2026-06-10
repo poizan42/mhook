@@ -1,6 +1,6 @@
-; inject_entry_thunk_x86.asm — entry-point hook trampoline for x86.
+; inject_delayed_entry_thunk_x86.asm — entry-point hook trampoline for x86.
 ;
-; Same role as inject_entry_thunk_x64.asm but for 32-bit targets.
+; Same role as inject_delayed_entry_thunk_x64.asm but for 32-bit targets.
 ; DoDelayedEntry is __cdecl (no stack arguments, returns PVOID in EAX).
 ;
 ; After the call returns, EAX = original entry point; JMP there so this
