@@ -86,10 +86,26 @@ remote thread that loads the companion DLL and calls the injection function,
 waits for the thread to complete, then frees the allocation.  Returns `S_OK` on
 success or an `HRESULT` error code.
 
-The library's own failure codes (`MHOOK_INJECT_E_*` in `mhook-inject/mhook_inject.h`)
-set the HRESULT Customer bit (`0xA00000xx`).  In **dynamic** builds, `mhook_inject.dll`
-embeds a message-table resource for them, so they can be turned into text with
-`FormatMessage`:
+#### Error codes
+
+The library's own failure codes are declared in `mhook-inject/mhook_inject.h`.
+They set the HRESULT **Customer bit** (`0xA00000xx`), so they belong to mhook as a
+whole rather than to a Microsoft facility:
+
+| HRESULT | Value | Meaning |
+|---|---|---|
+| `MHOOK_INJECT_E_PARAMS`   | `0xA0000001` | `params` is NULL, has the wrong `Size`, or specifies neither or both of the `FunctionPointer` / `DllPath`+`FunctionName` forms |
+| `MHOOK_INJECT_E_NO_NTDLL` | `0xA0000002` | `ntdll.dll` was not found in the target process |
+| `MHOOK_INJECT_E_NO_EXEC`  | `0xA0000003` | `_internal_Execute` was not found in the companion DLL |
+| `MHOOK_INJECT_E_TIMEOUT`  | `0xA0000004` | the remote injection thread did not finish within the timeout |
+| `MHOOK_INJECT_E_ACCESS`   | `0xA0000005` | `TargetProcess` was not granted `PROCESS_ALL_ACCESS` (see [`TargetProcess`](#mhook_inject_params) below) |
+
+Other failures are propagated as-is — e.g. an underlying `NTSTATUS` mapped into an
+`HRESULT` — so test the result with `FAILED(hr)` and only compare against the codes
+above when you need to distinguish a specific case.
+
+In **dynamic** builds, `mhook_inject.dll` embeds a message-table resource for the
+`MHOOK_INJECT_E_*` codes, so they can be turned into text with `FormatMessage`:
 
 ```c
 WCHAR buf[256];
