@@ -55,6 +55,12 @@ inline void __cdecl odprintf(PCSTR format, ...) {
 #define mhook_alloc(sz)     RtlAllocateHeap(RtlProcessHeap(), 0, (sz))
 #define mhook_zalloc(sz)    RtlAllocateHeap(RtlProcessHeap(), HEAP_ZERO_MEMORY, (sz))
 #define mhook_free(p)       RtlFreeHeap(RtlProcessHeap(), 0, (p))
+// realloc semantics: RtlReAllocateHeap returns NULL (a no-op failure) when given a
+// NULL base address, so fall back to RtlAllocateHeap in that case.  NOTE: (p) is
+// evaluated twice — pass a side-effect-free expression.
+#define mhook_realloc(p, sz)                                                  \
+    ((p) ? RtlReAllocateHeap(RtlProcessHeap(), 0, (p), (sz))                   \
+         : RtlAllocateHeap(RtlProcessHeap(), 0, (sz)))
 
 //=========================================================================
 #define MHOOKS_MAX_CODE_BYTES	32
@@ -673,11 +679,7 @@ static BOOL SuspendOtherThreads(PBYTE pbCode, DWORD cbBytes) {
 		// grow the handle array if needed (safe: nothing is suspended yet)
 		if (g_nThreadHandles >= nAllocated) {
 			ULONG nNew = nAllocated ? nAllocated * 2 : 8;
-			// RtlReAllocateHeap returns NULL (silently) when BaseAddress is NULL;
-			// use RtlAllocateHeap for the initial allocation instead.
-			HANDLE* pNew = g_hThreadHandles
-				? (HANDLE*)RtlReAllocateHeap(RtlProcessHeap(), 0, g_hThreadHandles, nNew * sizeof(HANDLE))
-				: (HANDLE*)mhook_alloc(nNew * sizeof(HANDLE));
+			HANDLE* pNew = (HANDLE*)mhook_realloc(g_hThreadHandles, nNew * sizeof(HANDLE));
 			if (!pNew) {
 				ODPRINTF(("mhooks: SuspendOtherThreads: allocation failure"));
 				bAllocFailed = TRUE;
