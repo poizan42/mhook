@@ -22,6 +22,14 @@ typedef NTSTATUS (NTAPI *LdrLoadDllFn)(
 // Flags propagated into the remote params; mirrors MHOOK_INJECT_FLAG_* values.
 #define MHOOK_REMOTE_FLAG_DELAY_UNTIL_INIT  0x00000001u
 
+// Set by the caller when the target was observed UNINITIALIZED before the
+// injection thread was created.  Authoritative: the injection thread itself
+// initializes the process as a side effect of loading the companion DLL, so by
+// the time _internal_Execute runs IsProcessInitialized() can no longer
+// distinguish "the target's own main thread initialized it" from "our injection
+// thread initialized it".  This bit captures the pre-injection truth.
+#define MHOOK_REMOTE_FLAG_TARGET_UNINITIALIZED  0x00000002u
+
 // ---------------------------------------------------------------------------
 // MhookInjectRemoteParams
 //

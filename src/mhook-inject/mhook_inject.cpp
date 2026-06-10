@@ -247,6 +247,43 @@ static BOOLEAN IsTargetWow64(HANDLE hProcess)
 }
 
 // ---------------------------------------------------------------------------
+// TargetIsUninitialized — TRUE only when the target is POSITIVELY observed to be
+// not-yet-initialized by the loader (PEB.Ldr not built, or Initialized == FALSE).
+//
+// Must be called BEFORE creating the injection thread: that thread runs
+// LdrpInitializeProcess as a side effect of loading the companion DLL, which
+// flips PEB_LDR_DATA.Initialized to TRUE.  Reading here captures the pre-injection
+// truth so the delayed-vs-immediate decision is authoritative.
+//
+// Returns FALSE on initialized OR on any read failure — the injected code then
+// falls back to its own IsProcessInitialized() check (prior behavior).
+// ---------------------------------------------------------------------------
+
+static BOOLEAN TargetIsUninitialized(HANDLE hProcess)
+{
+    PROCESS_BASIC_INFORMATION pbi = {};
+    if (!NT_SUCCESS(NtQueryInformationProcess(hProcess, ProcessBasicInformation,
+                                              &pbi, sizeof(pbi), NULL)) ||
+        !pbi.PebBaseAddress)
+        return FALSE;
+
+    NT_PEB peb = {};
+    if (!NT_SUCCESS(NtReadVirtualMemory(hProcess, pbi.PebBaseAddress,
+                                        &peb, sizeof(peb), NULL)))
+        return FALSE;
+
+    if (!peb.Ldr)
+        return TRUE;   // loader data not built yet → definitely uninitialized
+
+    PEB_LDR_DATA_MIN ldr = {};
+    if (!NT_SUCCESS(NtReadVirtualMemory(hProcess, peb.Ldr,
+                                        &ldr, sizeof(ldr), NULL)))
+        return FALSE;
+
+    return !ldr.Initialized;
+}
+
+// ---------------------------------------------------------------------------
 // ResolveFullPath — heap-allocate the resolved absolute path.
 // If relOrAbs starts with a drive letter or \\ it is used as-is;
 // otherwise it is appended to baseDir.
@@ -624,8 +661,14 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     rp.LdrLoadDll     = remoteLdrLoadDll;
     rp.ExecuteOffset  = executeRva;
     rp.IsDynamic      = isDynamic ? 1u : 0u;
-    rp.RemoteFlags    = (params->Flags & MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT)
-                        ? MHOOK_REMOTE_FLAG_DELAY_UNTIL_INIT : 0u;
+    rp.RemoteFlags    = 0u;
+    if (params->Flags & MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT) {
+        rp.RemoteFlags |= MHOOK_REMOTE_FLAG_DELAY_UNTIL_INIT;
+        // Read the target's loader-init state NOW, before the injection thread
+        // perturbs it, so the delayed-vs-immediate decision is authoritative.
+        if (TargetIsUninitialized(params->TargetProcess))
+            rp.RemoteFlags |= MHOOK_REMOTE_FLAG_TARGET_UNINITIALIZED;
+    }
     rp.FunctionRva    = functionRva;
     rp.UserData       = rUserData;
     rp.UserDataSize   = userDataBytes;

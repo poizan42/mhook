@@ -223,6 +223,22 @@ typedef CONST char *PCSZ;
 #define ProcessWow64Information  26UL
 #endif
 
+#ifndef ProcessBasicInformation
+#define ProcessBasicInformation  0UL
+#endif
+
+// Returned by NtQueryInformationProcess(ProcessBasicInformation).  We only need
+// PebBaseAddress (to locate the target's PEB), but the full struct must be passed
+// so the information length matches.
+typedef struct _PROCESS_BASIC_INFORMATION {
+    NTSTATUS  ExitStatus;
+    PVOID     PebBaseAddress;
+    ULONG_PTR AffinityMask;
+    LONG      BasePriority;
+    ULONG_PTR UniqueProcessId;
+    ULONG_PTR InheritedFromUniqueProcessId;
+} PROCESS_BASIC_INFORMATION, *PPROCESS_BASIC_INFORMATION;
+
 // ---------------------------------------------------------------------------
 // Process Environment Block — fields up to and including ProcessHeap.
 //

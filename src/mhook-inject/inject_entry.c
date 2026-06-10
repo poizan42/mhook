@@ -168,8 +168,16 @@ PVOID __cdecl DoDelayedEntry(void)
 
 NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
 {
+    // Authoritative decision: prefer the caller's pre-injection observation
+    // (MHOOK_REMOTE_FLAG_TARGET_UNINITIALIZED).  This injection thread runs
+    // LdrpInitializeProcess as a side effect of loading the companion DLL, so by
+    // now IsProcessInitialized() may report TRUE even for a target that was
+    // created suspended and never ran — the caller-set bit captures the truth.
+    // Fall back to the in-thread self-check only when the caller couldn't read
+    // the state (bit absent).
     BOOLEAN needDelay = (pParams->RemoteFlags & MHOOK_REMOTE_FLAG_DELAY_UNTIL_INIT)
-                        && !IsProcessInitialized();
+                        && ((pParams->RemoteFlags & MHOOK_REMOTE_FLAG_TARGET_UNINITIALIZED)
+                            || !IsProcessInitialized());
 
     // --- Resolve the target function ---
     //
@@ -298,11 +306,20 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
         }
 #endif
 
-        /* Race check: the process may have finished initialising between the
-           needDelay check above and the hook installation.  If the entry point
-           already fired (or will fire before DoDelayedEntry) we call the
-           function now; otherwise DoDelayedEntry fires and wins the CAS. */
-        if (IsProcessInitialized()) {
+        /* Race check (fallback path only): the process may have finished
+           initialising between the needDelay check above and the hook
+           installation.  If so, call the function now; otherwise DoDelayedEntry
+           fires and wins the CAS.
+
+           This must NOT run when the caller authoritatively observed the target
+           uninitialized: in that case THIS injection thread is what set
+           Initialized = TRUE (by loading the companion DLL), the target's own
+           main thread is still parked before the entry point, and the entry-point
+           hook is the correct — and only safe — trigger.  Calling here would run
+           the user function on the injection thread mid-loader-activity, which is
+           the original source of the flakiness. */
+        if (!(pParams->RemoteFlags & MHOOK_REMOTE_FLAG_TARGET_UNINITIALIZED)
+            && IsProcessInitialized()) {
             if (InterlockedCompareExchange(&g_DelayedCallDone, 1, 0) == 0)
                 CallDelayedTargetFunction();
         }
