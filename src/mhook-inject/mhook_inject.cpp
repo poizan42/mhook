@@ -595,7 +595,7 @@ typedef struct _MHOOK_INJECT_WATCHER {
     PVOID   ApcRoutine;        // caller VA (NULL if unused)
     PVOID   ApcContext;
     HANDLE  UserEvent;         // caller's Event (NULL if unused)
-    ULONG   TimeoutMs;
+    DWORD   TimeoutMs;
 } MHOOK_INJECT_WATCHER;
 
 static VOID NTAPI InjectWatcherProc(PVOID arg)
@@ -749,7 +749,7 @@ typedef struct _MHOOK_PROXY_WATCHER {
     PVOID   ApcRoutine;
     PVOID   ApcContext;
     HANDLE  UserEvent;
-    ULONG   TimeoutMs;
+    DWORD   TimeoutMs;
 } MHOOK_PROXY_WATCHER;
 
 static VOID NTAPI ProxyWatcherProc(PVOID arg)

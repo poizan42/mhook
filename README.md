@@ -158,7 +158,7 @@ typedef struct _MHOOK_INJECT_PARAMS {
     //   Would-be-negative values (sign bit set, except INFINITE) are rejected
     //   with MHOOK_INJECT_E_PARAMS.  Measured against monotonic interrupt time,
     //   so it is unaffected by wall-clock changes and excludes system sleep.
-    ULONG  TimeoutMs;
+    DWORD  TimeoutMs;      // millisecond count, as the Win32 wait APIs use
 
     // Combination of MHOOK_INJECT_FLAG_* values (see below); 0 = default.
     ULONG  Flags;

@@ -150,7 +150,8 @@ typedef struct _MHOOK_INJECT_PARAMS {
     // waiting on the first reduces what remains for the second.  The wait is
     // measured against the monotonic unbiased interrupt time, so it is immune to
     // wall-clock changes and does not count time the system spent asleep.
-    ULONG  TimeoutMs;
+    // (DWORD millisecond count, as the Win32 wait APIs use; max ~24.85 days.)
+    DWORD  TimeoutMs;
 
     // -----------------------------------------------------------------------
     // Async completion — only meaningful when MHOOK_INJECT_FLAG_ASYNC is set.
