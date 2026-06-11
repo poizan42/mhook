@@ -12,6 +12,8 @@
   <Project Path="src/mhook_seh3/mhook_seh3.vcxproj" Id="7c9e0f2a-3b4d-4e5f-9a8b-1c2d3e4f5a6b" />
   <Project Path="src/mhook_test_uninitialized_inject/mhook_test_uninitialized_inject.vcxproj" Id="f2a7c3b8-91d4-4e6f-a823-5c9b0d7e2f14" />
   <Project Path="src/mhook-inject/mhook_inject.vcxproj" Id="a3b7c2d1-5e4f-4a9b-8c3d-2f1e6a0b7c94" />
+  <Project Path="src/mhook_inject_proxy/mhook_inject_proxy_lib.vcxproj" Id="c7a2e1f4-9b3d-4c6e-8a1f-2d5b7e9c0a13" />
+  <Project Path="src/mhook_inject_proxy/mhook_inject_proxy.vcxproj" Id="d8b3f2a5-0c4e-4d7f-9b2a-3e6c8f0d1b24" />
   <Project Path="src/mhook_inject_test_companion/mhook_inject_test_companion.vcxproj" Id="c5d2e1f0-8a3b-4c6d-9e7f-1a2b3c4d5e6f" />
   <Project Path="src/mhook_inject_win32_test_companion/mhook_inject_win32_test_companion.vcxproj" Id="e7f3a1b0-9c4d-4e8f-a625-3b0c2d5e7f91" />
   <Project Path="src/mhook-unit-tests/mhook-unit-tests.vcxproj" Id="d4a2f8b3-7e1c-4d9a-b5f2-3c8e6a1d0f47" />

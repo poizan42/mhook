@@ -8,6 +8,9 @@ EXPORTS
     NtOpenFile
     NtReadFile
     NtQueryInformationProcess
+    NtMapViewOfSection
+    NtUnmapViewOfSection
+    RtlExitUserProcess
     LdrLoadDll
     LdrGetProcedureAddress
     _snprintf

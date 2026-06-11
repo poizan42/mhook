@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- mhook_inject_proxy_lib — the ntdll-only proxy logic (MhookInjectProxyMain +
+       optional MhookInjectProxyEntry) used for 32-bit -> 64-bit injection.  It is the
+       static deliverable a consumer links into their own x64 executable; the bundled
+       mhook_inject_proxy.exe is a thin wrapper around it.
+
+       x64-only: an x86 proxy is pointless (32->64 needs a 64-bit helper).  The Win32
+       configs and the *Dynamic* x64 configs are Utility no-ops so the 8-config
+       solution build stays green.  The proxy is self-contained and ntdll-only:
+       consumers link it together with the static x64 mhook_inject.lib + mhook.lib. -->
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">          <Configuration>Debug</Configuration>          <Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="DebugDynamic|Win32">   <Configuration>DebugDynamic</Configuration>   <Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">        <Configuration>Release</Configuration>        <Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="ReleaseDynamic|Win32"> <Configuration>ReleaseDynamic</Configuration> <Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">            <Configuration>Debug</Configuration>          <Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="DebugDynamic|x64">     <Configuration>DebugDynamic</Configuration>   <Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">          <Configuration>Release</Configuration>        <Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="ReleaseDynamic|x64">   <Configuration>ReleaseDynamic</Configuration> <Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{C7A2E1F4-9B3D-4C6E-8A1F-2D5B7E9C0A13}</ProjectGuid>
+    <RootNamespace>mhook_inject_proxy_lib</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <!-- ===== Configuration types: StaticLibrary on x64 static configs, Utility elsewhere ===== -->
+  <PropertyGroup Condition="'$(Platform)'=='x64' and ('$(Configuration)'=='Debug' or '$(Configuration)'=='Release')" Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+    <WholeProgramOptimization Condition="'$(Configuration)'=='Release'">true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Condition="!('$(Platform)'=='x64' and ('$(Configuration)'=='Debug' or '$(Configuration)'=='Release'))" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <!-- Literal folder name (not $(ShortProjectName), which shortens long names to
+       "mhook_in.<guid>") so artifact paths are clean and predictable. -->
+  <PropertyGroup>
+    <TargetName>mhook_inject_proxy_internal</TargetName>
+    <OutDir>$(SolutionDir)\build\artifacts\mhook_inject_proxy_lib\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)\build\obj\mhook_inject_proxy_lib\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+
+  <!-- ntdll-only compile settings (mirrors mhook_inject) -->
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <!-- ntdll-only: no CRT, so disable /RTC (which would emit _RTC_* calls). -->
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <SupportJustMyCode>false</SupportJustMyCode>
+      <SDLCheck>false</SDLCheck>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+      <OmitDefaultLibName>true</OmitDefaultLibName>
+      <AdditionalIncludeDirectories>$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <Optimization Condition="'$(Configuration)'=='Release'">MaxSpeed</Optimization>
+      <Optimization Condition="'$(Configuration)'=='Debug'">Disabled</Optimization>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreaded</RuntimeLibrary>
+      <PreprocessorDefinitions Condition="'$(Configuration)'=='Debug'">_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)'=='Release'">NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ClCompile Include="proxy_main.c" />
+    <ClCompile Include="proxy_entry.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\mhook-inject\inject_proxy_params.h" />
+  </ItemGroup>
+
+  <!-- ntdll_extra_stub: needed so CombineWithNtdllExtra can find ntdll_extra.lib -->
+  <ItemGroup>
+    <ProjectReference Include="..\ntdll_extra_stub\ntdll_extra_stub.vcxproj">
+      <Project>{B1E3F8C2-4A5D-4F9E-8B2C-1D6E7A3F9B04}</Project>
+    </ProjectReference>
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+  <!-- Merge the raw archive with ntdll_extra.lib → mhook_inject_proxy.lib.  x64-only:
+       this is the first x64-only static lib, so the Platform guard is essential —
+       without it the target would fire on a nonexistent Win32 ntdll_extra path. -->
+  <Target Name="CombineWithNtdllExtra"
+          AfterTargets="Lib"
+          Condition="'$(ConfigurationType)'=='StaticLibrary' and '$(Platform)'=='x64'">
+    <Lib OutputFile="$(OutDir)mhook_inject_proxy.lib"
+         Sources="$(OutDir)mhook_inject_proxy_internal.lib;$(SolutionDir)build\artifacts\ntdll_extra_stub\$(Platform)\$(Configuration)\ntdll_extra.lib" />
+  </Target>
+</Project>

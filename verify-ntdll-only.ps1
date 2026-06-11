@@ -128,7 +128,7 @@ function Undecorate([string]$sym, [bool]$IsX86) {
 # ---------------------------------------------------------------------------
 # DLL check — import table must reference only ntdll.dll
 # ---------------------------------------------------------------------------
-function Test-DllImports([string]$Dumpbin, [string]$Path) {
+function Test-DllImports([string]$Dumpbin, [string]$Path, [string[]]$AllowImports = @('ntdll.dll')) {
     $out = & $Dumpbin /imports $Path 2>$null
 
     # Import section headers: "    somedll.dll"  (4 spaces, name, nothing else)
@@ -140,9 +140,10 @@ function Test-DllImports([string]$Dumpbin, [string]$Path) {
         return "no DLL imports found in import table — unexpected"
     }
 
-    $foreign = @($dlls | Where-Object { $_ -ne 'ntdll.dll' })
+    $allowed = $AllowImports | ForEach-Object { $_.ToLower() }
+    $foreign = @($dlls | Where-Object { $_ -notin $allowed })
     if ($foreign.Count -gt 0) {
-        return "imports from non-ntdll DLL(s): $($foreign -join ', ')"
+        return "imports from disallowed DLL(s): $($foreign -join ', ') (allowed: $($allowed -join ', '))"
     }
     return $null   # pass
 }
@@ -256,6 +257,20 @@ $configs = @(
     [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='Win32'; Config='DebugDynamic';   IsLib=$false; IsX86=$true;  Exports=@();               NeedsMhook=$false }
     [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='Win32'; Config='Release';        IsLib=$true;  IsX86=$true;  Exports=@('Mhook_Inject'); NeedsMhook=$true; NeedsSeh3=$true  }
     [pscustomobject]@{ Project='mhook_inject'; BaseName='mhook_inject'; Arch='Win32'; Config='ReleaseDynamic'; IsLib=$false; IsX86=$true;  Exports=@();               NeedsMhook=$false }
+
+    # mhook_inject_proxy (x64-only) — the native 32->64 proxy, built per flavour.
+    #   .exe static (Debug/Release): self-contained → imports only ntdll.dll.
+    #   .exe dynamic (DebugDynamic/ReleaseDynamic): imports ntdll.dll + mhook_inject.dll
+    #        (both of which are themselves verified ntdll-only by their own rows).
+    #   .lib (Debug/Release): the consumer deliverable; links mhook_inject.lib + mhook.lib
+    #        → resolves to ntdll only.
+    # (All Win32 configs, and the dynamic LIB configs, are Utility no-ops — no artifact.)
+    [pscustomobject]@{ Project='mhook_inject_proxy';     BaseName='mhook_inject_proxy'; Arch='x64'; Config='Debug';          IsLib=$false; IsX86=$false; Ext='exe'; Exports=@();                       NeedsMhook=$false }
+    [pscustomobject]@{ Project='mhook_inject_proxy';     BaseName='mhook_inject_proxy'; Arch='x64'; Config='Release';        IsLib=$false; IsX86=$false; Ext='exe'; Exports=@();                       NeedsMhook=$false }
+    [pscustomobject]@{ Project='mhook_inject_proxy';     BaseName='mhook_inject_proxy'; Arch='x64'; Config='DebugDynamic';   IsLib=$false; IsX86=$false; Ext='exe'; AllowImports=@('ntdll.dll','mhook_inject.dll'); Exports=@(); NeedsMhook=$false }
+    [pscustomobject]@{ Project='mhook_inject_proxy';     BaseName='mhook_inject_proxy'; Arch='x64'; Config='ReleaseDynamic'; IsLib=$false; IsX86=$false; Ext='exe'; AllowImports=@('ntdll.dll','mhook_inject.dll'); Exports=@(); NeedsMhook=$false }
+    [pscustomobject]@{ Project='mhook_inject_proxy_lib'; BaseName='mhook_inject_proxy'; Arch='x64'; Config='Debug';          IsLib=$true;  IsX86=$false;            Exports=@('MhookInjectProxyMain'); NeedsMhook=$true; NeedsInject=$true }
+    [pscustomobject]@{ Project='mhook_inject_proxy_lib'; BaseName='mhook_inject_proxy'; Arch='x64'; Config='Release';        IsLib=$true;  IsX86=$false;            Exports=@('MhookInjectProxyMain'); NeedsMhook=$true; NeedsInject=$true }
 )
 
 # Cache SDK ntdll.lib paths per architecture (looked up on first use).
@@ -264,7 +279,9 @@ $sdkLibCache = @{}
 $passed = 0; $failed = 0; $skipped = 0
 
 foreach ($cfg in $configs) {
-    $ext   = if ($cfg.IsLib) { 'lib' } else { 'dll' }
+    $ext   = if ($cfg.IsLib) { 'lib' }
+             elseif ($cfg.PSObject.Properties.Name -contains 'Ext') { $cfg.Ext }
+             else { 'dll' }
     $file  = Join-Path $SolutionDir build artifacts $cfg.Project $cfg.Arch $cfg.Config "$($cfg.BaseName).$ext"
     $label = "$($cfg.Project) $($cfg.Config)|$($cfg.Arch)".PadRight(38)
 
@@ -301,6 +318,17 @@ foreach ($cfg in $configs) {
             $extraLibs = @($mhookLib)
         }
 
+        # mhook_inject_proxy_lib references Mhook_Inject from mhook_inject.lib.
+        if (($cfg.PSObject.Properties.Name -contains 'NeedsInject') -and $cfg.NeedsInject) {
+            $injectLib = Join-Path $SolutionDir build artifacts mhook_inject "$($cfg.Arch)\$($cfg.Config)\mhook_inject.lib"
+            if (-not (Test-Path $injectLib)) {
+                Write-Host "  SKIP    $label  (mhook_inject.lib not found)"
+                $skipped++
+                continue
+            }
+            $extraLibs += $injectLib
+        }
+
         # x86 mhook_inject static: inject_entry.c's __try needs our self-provided
         # _except_handler3 + SafeSEH load-config from mhook_seh3.lib (ntdll-only).
         # (-contains short-circuits before $cfg.NeedsSeh3 under StrictMode.)
@@ -317,7 +345,9 @@ foreach ($cfg in $configs) {
         $err = Test-LibByLinking $dumpbin $linkX64 $linkX86 $file $cfg.Arch $sdkNtdll $ntdllExtraLib `
                                  -Exports $cfg.Exports -AdditionalLibs $extraLibs
     } else {
-        $err = Test-DllImports $dumpbin $file
+        $allow = if ($cfg.PSObject.Properties.Name -contains 'AllowImports') { $cfg.AllowImports }
+                 else { @('ntdll.dll') }
+        $err = Test-DllImports $dumpbin $file -AllowImports $allow
     }
 
     if ($err) {

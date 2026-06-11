@@ -157,6 +157,12 @@ typedef struct _OBJECT_ATTRIBUTES {
 #ifndef OBJ_CASE_INSENSITIVE
 #define OBJ_CASE_INSENSITIVE 0x00000040UL
 #endif
+// OBJ_INHERIT — mark a handle inheritable so a child process created with
+// InheritHandles=TRUE receives it (at the SAME numeric value).  Used by the
+// 32->64 proxy launcher to hand the section/event/target handles to the proxy.
+#ifndef OBJ_INHERIT
+#define OBJ_INHERIT 0x00000002UL
+#endif
 #endif
 
 // ---------------------------------------------------------------------------
@@ -530,6 +536,100 @@ typedef struct _RTL_USER_PROCESS_PARAMETERS_MIN {
 } RTL_USER_PROCESS_PARAMETERS_MIN, *PRTL_USER_PROCESS_PARAMETERS_MIN;
 
 // ---------------------------------------------------------------------------
+// RTL_USER_PROCESS_PARAMETERS — extended to reach CommandLine, for the 32->64
+// proxy: the proxy reads its own command line from RtlCurrentPeb()->ProcessParameters.
+// Uses natural field types so the compiler reproduces the real per-arch layout
+// (CurrentDirectory is a CURDIR = UNICODE_STRING + HANDLE).  Verified offsets:
+//   x64: ImagePathName@0x60, CommandLine@0x70
+//   x86: ImagePathName@0x38, CommandLine@0x40
+// ---------------------------------------------------------------------------
+
+typedef struct _CURDIR_MIN {
+    UNICODE_STRING DosPath;
+    HANDLE         Handle;
+} CURDIR_MIN;
+
+// Extended to reach WindowFlags / ShowWindowFlags as well — the proxy launcher sets
+// these (STARTF_USESHOWWINDOW + SW_HIDE) so the spawned console proxy has no visible
+// window, exactly as CreateProcess + STARTUPINFO would.  Verified offsets:
+//   x64: Environment@0x80, WindowFlags@0xA4, ShowWindowFlags@0xA8
+//   x86: Environment@0x48, WindowFlags@0x68, ShowWindowFlags@0x6C
+typedef struct _RTL_USER_PROCESS_PARAMETERS_CMDLINE {
+    ULONG          MaximumLength;
+    ULONG          Length;
+    ULONG          Flags;
+    ULONG          DebugFlags;
+    HANDLE         ConsoleHandle;
+    ULONG          ConsoleFlags;
+    HANDLE         StandardInput;
+    HANDLE         StandardOutput;
+    HANDLE         StandardError;
+    CURDIR_MIN     CurrentDirectory;
+    UNICODE_STRING DllPath;
+    UNICODE_STRING ImagePathName;
+    UNICODE_STRING CommandLine;
+    PVOID          Environment;
+    ULONG          StartingX;
+    ULONG          StartingY;
+    ULONG          CountX;
+    ULONG          CountY;
+    ULONG          CountCharsX;
+    ULONG          CountCharsY;
+    ULONG          FillAttribute;
+    ULONG          WindowFlags;       // STARTUPINFO.dwFlags (STARTF_*)
+    ULONG          ShowWindowFlags;   // STARTUPINFO.wShowWindow (SW_*)
+} RTL_USER_PROCESS_PARAMETERS_CMDLINE, *PRTL_USER_PROCESS_PARAMETERS_CMDLINE;
+
+// STARTUPINFO show-window constants (normally winbase.h/winuser.h, absent here).
+#ifndef STARTF_USESHOWWINDOW
+#define STARTF_USESHOWWINDOW 0x00000001UL
+#endif
+#ifndef SW_HIDE
+#define SW_HIDE 0
+#endif
+
+// RTL_USER_PROCESS_PARAMETERS.ConsoleHandle sentinel: spawn with NO console at all
+// (the equivalent of CreateProcess's DETACHED_PROCESS).  Unlike merely hiding the
+// window, this stops the loader allocating a console / spawning conhost.exe.
+#ifndef RTL_USER_PROC_DETACHED_PROCESS
+#define RTL_USER_PROC_DETACHED_PROCESS ((HANDLE)(LONG_PTR)-1)
+#endif
+
+// Output of RtlCreateUserProcess.  We only consume Process/Thread/ClientId; the
+// ImageInformation tail (SECTION_IMAGE_INFORMATION, ~0x48 bytes on x64) is reserved
+// over-generously so RtlCreateUserProcess can fill it without overrunning.
+typedef struct _RTL_USER_PROCESS_INFORMATION_MIN {
+    ULONG     Length;
+    HANDLE    Process;
+    HANDLE    Thread;
+    CLIENT_ID ClientId;
+    BYTE      ImageInformation[0x60];
+} RTL_USER_PROCESS_INFORMATION_MIN, *PRTL_USER_PROCESS_INFORMATION_MIN;
+
+// SECTION_INHERIT — InheritDisposition for NtMapViewOfSection.
+#ifndef _SECTION_INHERIT_DEFINED
+#define _SECTION_INHERIT_DEFINED
+typedef enum _SECTION_INHERIT {
+    ViewShare = 1,
+    ViewUnmap = 2
+} SECTION_INHERIT;
+#endif
+
+// WAIT_TYPE — for NtWaitForMultipleObjects (WaitAny = wake on the first signalled).
+#ifndef _WAIT_TYPE_DEFINED
+#define _WAIT_TYPE_DEFINED
+typedef enum _WAIT_TYPE {
+    WaitAll = 0,
+    WaitAny = 1
+} WAIT_TYPE;
+#endif
+
+// Flags for RtlCreateProcessParametersEx: build a normalized (de-relativised) block.
+#ifndef RTL_USER_PROC_PARAMS_NORMALIZED
+#define RTL_USER_PROC_PARAMS_NORMALIZED 0x00000001UL
+#endif
+
+// ---------------------------------------------------------------------------
 // Debug output constants
 // ---------------------------------------------------------------------------
 
@@ -742,6 +842,76 @@ NTSTATUS NTAPI NtWaitForSingleObject(
 // Not declared in any SDK header, but exported from ntdll.lib for both arches.
 BOOLEAN NTAPI RtlQueryUnbiasedInterruptTime(
     PULONGLONG      InterruptTime);
+
+// Wait for any/all of several kernel objects (used by the 32->64 proxy launcher
+// to wake on EITHER the completion event OR the proxy process exiting).
+NTSTATUS NTAPI NtWaitForMultipleObjects(
+    ULONG           Count,
+    PHANDLE         Handles,
+    WAIT_TYPE       WaitType,
+    BOOLEAN         Alertable,
+    PLARGE_INTEGER  Timeout);
+
+// Section objects — shared memory carrying the 32->64 proxy request/response block.
+NTSTATUS NTAPI NtCreateSection(
+    PHANDLE             SectionHandle,
+    ACCESS_MASK         DesiredAccess,
+    POBJECT_ATTRIBUTES  ObjectAttributes,
+    PLARGE_INTEGER      MaximumSize,
+    ULONG               SectionPageProtection,
+    ULONG               AllocationAttributes,
+    HANDLE              FileHandle);
+
+NTSTATUS NTAPI NtMapViewOfSection(
+    HANDLE          SectionHandle,
+    HANDLE          ProcessHandle,
+    PVOID          *BaseAddress,
+    ULONG_PTR       ZeroBits,
+    SIZE_T          CommitSize,
+    PLARGE_INTEGER  SectionOffset,
+    PSIZE_T         ViewSize,
+    SECTION_INHERIT InheritDisposition,
+    ULONG           AllocationType,
+    ULONG           Win32Protect);
+
+NTSTATUS NTAPI NtUnmapViewOfSection(
+    HANDLE  ProcessHandle,
+    PVOID   BaseAddress);
+
+// Process creation (native) — the 32->64 proxy launcher spawns a 64-bit proxy.
+// ProcessParameters is the opaque block returned by RtlCreateProcessParametersEx;
+// it is treated as PVOID here to avoid modelling the full RTL_USER_PROCESS_PARAMETERS.
+NTSTATUS NTAPI RtlCreateProcessParametersEx(
+    PVOID          *pProcessParameters,
+    PUNICODE_STRING ImagePathName,
+    PUNICODE_STRING DllPath,
+    PUNICODE_STRING CurrentDirectory,
+    PUNICODE_STRING CommandLine,
+    PVOID           Environment,
+    PUNICODE_STRING WindowTitle,
+    PUNICODE_STRING DesktopInfo,
+    PUNICODE_STRING ShellInfo,
+    PUNICODE_STRING RuntimeData,
+    ULONG           Flags);
+
+NTSTATUS NTAPI RtlDestroyProcessParameters(
+    PVOID           ProcessParameters);
+
+NTSTATUS NTAPI RtlCreateUserProcess(
+    PUNICODE_STRING                   NtImagePathName,
+    ULONG                             AttributesDeprecated,
+    PVOID                             ProcessParameters,
+    PVOID                             ProcessSecurityDescriptor,
+    PVOID                             ThreadSecurityDescriptor,
+    HANDLE                            ParentProcess,
+    BOOLEAN                           InheritHandles,
+    HANDLE                            DebugPort,
+    HANDLE                            TokenHandle,
+    PRTL_USER_PROCESS_INFORMATION_MIN ProcessInformation);
+
+// Terminate the current process cleanly (runs no further user code).
+DECLSPEC_NORETURN VOID NTAPI RtlExitUserProcess(
+    NTSTATUS        ExitStatus);
 
 // File I/O
 NTSTATUS NTAPI NtOpenFile(

@@ -10,6 +10,7 @@
 
 #include "../nt_defs.h"
 #include "inject_params.h"
+#include "inject_proxy_params.h"   // 32->64 proxy wire contract (used by InjectViaProxy)
 
 // The library never includes <windows.h>; define the timeout sentinel locally.
 #ifndef INFINITE
@@ -638,6 +639,429 @@ static VOID NTAPI InjectWatcherProc(PVOID arg)
     RtlFreeHeap(RtlProcessHeap(), 0, w);
 }
 
+#ifndef _M_X64
+// ===========================================================================
+// 32-bit caller -> 64-bit target: delegate to a native x64 proxy executable.
+//
+// A WOW64 process has no ntdll-only way to create a 64-bit thread, so it spawns a
+// native x64 proxy (RtlCreateUserProcess) that runs the ordinary same-arch
+// Mhook_Inject on its behalf.  Handover is a shared section (the documented
+// MHOOK_PROXY_BLOCK contract in inject_proxy_params.h): the section, completion
+// event and an access-preserving duplicate of the target handle are all made
+// inheritable and the proxy is launched with InheritHandles=TRUE, so it receives
+// them at identical handle values — the section handle is passed on the command
+// line, the event/target handles inside the block.  This avoids any cross-arch
+// virtual-memory write back into the 32-bit caller.
+// ===========================================================================
+
+// Uppercase-hex format `value` into buf (no prefix). buf must hold >= 9 WCHARs.
+// Pointer-width (this is x86-only code; a 64-bit shift here would pull the CRT
+// helper __aullshr, which we don't have).  Handle values fit in ULONG_PTR.
+static void ProxyHexFormat(ULONG_PTR value, WCHAR *buf)
+{
+    if (value == 0) { buf[0] = L'0'; buf[1] = L'\0'; return; }
+    WCHAR tmp[16];
+    int n = 0;
+    while (value && n < 16) {
+        ULONG d = (ULONG)(value & 0xFu);
+        tmp[n++] = (WCHAR)(d < 10 ? (L'0' + d) : (L'A' + (d - 10)));
+        value >>= 4;
+    }
+    for (int i = 0; i < n; ++i) buf[i] = tmp[n - 1 - i];
+    buf[n] = L'\0';
+}
+
+static void ProxyInitUStr(UNICODE_STRING *us, WCHAR *s)
+{
+    USHORT n = 0; if (s) while (s[n]) ++n;
+    us->Length        = (USHORT)(n * sizeof(WCHAR));
+    us->MaximumLength = (USHORT)((n + 1) * sizeof(WCHAR));
+    us->Buffer        = s;
+}
+
+// Heap-allocate "\??\" + path (the NT path form RtlCreateUserProcess expects).
+static WCHAR *ProxyPrependNtPrefix(const WCHAR *path)
+{
+    SIZE_T n = 0; while (path[n]) ++n;
+    WCHAR *r = HeapAllocPath(n + 5);
+    if (!r) return NULL;
+    r[0] = L'\\'; r[1] = L'?'; r[2] = L'?'; r[3] = L'\\';
+    for (SIZE_T i = 0; i <= n; ++i) r[4 + i] = path[i];
+    return r;
+}
+
+// Heap-allocate the proxy command line:  "<imagePath>" <sectionHandleHex>
+static WCHAR *ProxyBuildCmdLine(const WCHAR *imagePath, const WCHAR *secHex)
+{
+    SIZE_T plen = 0; while (imagePath[plen]) ++plen;
+    SIZE_T hlen = 0; while (secHex[hlen]) ++hlen;
+    SIZE_T total = 1 + plen + 1 + 1 + hlen + 1;   // " path " space hex NUL  -> "..." + ' ' + hex
+    WCHAR *r = HeapAllocPath(total);
+    if (!r) return NULL;
+    SIZE_T pos = 0;
+    r[pos++] = L'"';
+    for (SIZE_T i = 0; i < plen; ++i) r[pos++] = imagePath[i];
+    r[pos++] = L'"';
+    r[pos++] = L' ';
+    for (SIZE_T i = 0; i < hlen; ++i) r[pos++] = secHex[i];
+    r[pos] = L'\0';
+    return r;
+}
+
+// Does an absolute path exist?  ntPath is its "\??\"-prefixed UNICODE_STRING.
+static BOOLEAN ProxyFileExists(UNICODE_STRING *ntPath)
+{
+    OBJECT_ATTRIBUTES oa;
+    InitializeObjectAttributes(&oa, ntPath, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    IO_STATUS_BLOCK iosb;
+    HANDLE h = NULL;
+    NTSTATUS st = NtOpenFile(&h, FILE_READ_ATTRIBUTES | SYNCHRONIZE, &oa, &iosb,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                             FILE_SYNCHRONOUS_IO_NONALERT | FILE_NON_DIRECTORY_FILE);
+    if (NT_SUCCESS(st)) { NtClose(h); return TRUE; }
+    return FALSE;
+}
+
+// Resolve the final status from the proxy completion wait.
+//   waitSt == 0           -> completion event (ResultHr is final)
+//   waitSt == 1           -> proxy exited; use ResultHr if it published DONE, else E_PROXY
+//   waitSt == STATUS_TIMEOUT -> timeout
+static HRESULT ProxyResolveStatus(NTSTATUS waitSt, volatile MHOOK_PROXY_BLOCK *blk)
+{
+    if (waitSt == STATUS_TIMEOUT) return MHOOK_INJECT_E_TIMEOUT;
+    if (waitSt == (NTSTATUS)0)    return (HRESULT)blk->ResultHr;          // event signalled
+    if (blk->ProxyState == MHOOK_PROXY_STATE_DONE) return (HRESULT)blk->ResultHr;
+    return MHOOK_INJECT_E_PROXY;                                          // proxy died early
+}
+
+// Async-completion watcher (runs in the 32-bit caller): waits for the proxy to
+// finish (or die), then delivers IoStatusBlock/Event/APC in-process.  It owns the
+// section view+handle, the completion event, the inheritable target dup, and the
+// proxy process handle, and frees them all.
+typedef struct _MHOOK_PROXY_WATCHER {
+    HANDLE  CompletionEvent;
+    HANDLE  ProxyProcess;
+    PVOID   SectionView;
+    HANDLE  SectionHandle;
+    HANDLE  TargetInherit;
+    PVOID   IoStatusBlock;
+    HANDLE  CallerThread;
+    PVOID   ApcRoutine;
+    PVOID   ApcContext;
+    HANDLE  UserEvent;
+    ULONG   TimeoutMs;
+} MHOOK_PROXY_WATCHER;
+
+static VOID NTAPI ProxyWatcherProc(PVOID arg)
+{
+    MHOOK_PROXY_WATCHER *w = (MHOOK_PROXY_WATCHER *)arg;
+    HANDLE   handles[2] = { w->CompletionEvent, w->ProxyProcess };
+    NTSTATUS waitSt;
+    if (w->TimeoutMs == INFINITE) {
+        waitSt = NtWaitForMultipleObjects(2, handles, WaitAny, FALSE, NULL);
+    } else {
+        ULONG ms = w->TimeoutMs ? w->TimeoutMs : 30000u;
+        LARGE_INTEGER rel; rel.QuadPart = -(LONGLONG)__emulu(ms, 10000u);
+        waitSt = NtWaitForMultipleObjects(2, handles, WaitAny, FALSE, &rel);
+    }
+    HRESULT status = ProxyResolveStatus(waitSt, (volatile MHOOK_PROXY_BLOCK *)w->SectionView);
+
+    if (w->IoStatusBlock) {
+        IO_STATUS_BLOCK *iosb = (IO_STATUS_BLOCK *)w->IoStatusBlock;
+        iosb->Status      = (NTSTATUS)status;
+        iosb->Information = 0;
+    }
+    if (w->UserEvent)
+        NtSetEvent(w->UserEvent, NULL);
+    if (w->ApcRoutine && w->CallerThread)
+        NtQueueApcThread(w->CallerThread, (PPS_APC_ROUTINE)w->ApcRoutine,
+                         w->ApcContext, w->IoStatusBlock, NULL);
+
+    if (w->SectionView)     NtUnmapViewOfSection(NtCurrentProcess(), w->SectionView);
+    if (w->SectionHandle)   NtClose(w->SectionHandle);
+    if (w->CompletionEvent) NtClose(w->CompletionEvent);
+    if (w->TargetInherit)   NtClose(w->TargetInherit);
+    if (w->ProxyProcess)    NtClose(w->ProxyProcess);
+    if (w->CallerThread)    NtClose(w->CallerThread);
+    RtlFreeHeap(RtlProcessHeap(), 0, w);
+}
+
+static HRESULT InjectViaProxy(MHOOK_INJECT_PARAMS *params)
+{
+    // FunctionPointer form is meaningless across the process/arch boundary; require
+    // the DllPath + FunctionName form naming an x64 companion.
+    if (params->FunctionPointer)             return MHOOK_INJECT_E_PARAMS;
+    if (!params->DllPath || !params->FunctionName) return MHOOK_INJECT_E_PARAMS;
+    if (params->UserDataSize > 0xF0000000u)  return MHOOK_INJECT_E_PARAMS;  // fits ULONG section field
+
+    // All locals declared up front (no initializer skipped by a forward goto).
+    HRESULT  hr;             hr = E_FAIL;
+    NTSTATUS st;             st = STATUS_UNSUCCESSFUL;
+    BOOLEAN  isAsync;        isAsync = (params->Flags & MHOOK_INJECT_FLAG_ASYNC) != 0;
+    BOOLEAN  handedToWatcher; handedToWatcher = FALSE;
+    WCHAR   *selfPath;       selfPath  = NULL;
+    WCHAR   *selfDir;        selfDir   = NULL;
+    WCHAR   *proxyPath;      proxyPath = NULL;
+    WCHAR   *ntImage;        ntImage   = NULL;
+    WCHAR   *dllAbs;         dllAbs    = NULL;
+    WCHAR   *mhookAbs;       mhookAbs  = NULL;
+    WCHAR   *cmdLine;        cmdLine   = NULL;
+    HANDLE   hSection;       hSection  = NULL;
+    HANDLE   hEvent;         hEvent    = NULL;
+    HANDLE   hTargetInherit; hTargetInherit = NULL;
+    HANDLE   hProxyProc;     hProxyProc = NULL;
+    HANDLE   hProxyThread;   hProxyThread = NULL;
+    PVOID    sectionView;    sectionView = NULL;
+    PVOID    procParams;     procParams  = NULL;
+
+    selfPath = GetModuleFullPath((PVOID)&Mhook_Inject);
+    if (!selfPath) { hr = E_FAIL; goto cleanup; }
+    selfDir = GetDirectoryFromPath(selfPath);
+    if (!selfDir) { hr = E_FAIL; goto cleanup; }
+
+    // Resolve the proxy executable.  An explicit ProxyPath is used verbatim; otherwise
+    // probe two conventional locations relative to the module dir and use the first
+    // that exists: the flat self-contained exe (static build), then the dynamic
+    // subdirectory bundle.  A missing proxy is the expected "32->64 not configured"
+    // case → E_NO_PROXY, reported before any allocation.
+    {
+        const WCHAR *cands[2];
+        int          ncand;
+        if (params->ProxyPath) {
+            cands[0] = params->ProxyPath; ncand = 1;
+        } else {
+            cands[0] = L"mhook_inject_proxy.exe";
+            cands[1] = L"mhook_inject_proxy\\mhook_inject_proxy.exe";
+            ncand = 2;
+        }
+        for (int i = 0; i < ncand; ++i) {
+            WCHAR *cand = ResolveFullPath(selfDir, cands[i]);
+            if (!cand) continue;
+            WCHAR  *nt     = ProxyPrependNtPrefix(cand);
+            BOOLEAN exists = FALSE;
+            if (nt) { UNICODE_STRING ntu; ProxyInitUStr(&ntu, nt); exists = ProxyFileExists(&ntu); }
+            if (exists) { proxyPath = cand; ntImage = nt; break; }
+            HeapFreePath(cand);
+            HeapFreePath(nt);
+        }
+        if (!proxyPath) { hr = MHOOK_INJECT_E_NO_PROXY; goto cleanup; }
+    }
+
+    // Absolute paths so the proxy never depends on its own working directory.
+    dllAbs = ResolveFullPath(selfDir, params->DllPath);
+    if (!dllAbs) { hr = E_FAIL; goto cleanup; }
+    if (params->MhookDllPath) {
+        mhookAbs = ResolveFullPath(selfDir, params->MhookDllPath);
+        if (!mhookAbs) { hr = E_FAIL; goto cleanup; }
+    }
+
+    // Build the shared section: header + 8-byte-aligned variable data region.
+    {
+        auto wbytes = [](const WCHAR *s) -> SIZE_T {
+            if (!s) return 0; SIZE_T n = 0; while (s[n]) ++n; return (n + 1) * sizeof(WCHAR);
+        };
+        auto abytes = [](const CHAR *s) -> SIZE_T {
+            if (!s) return 0; SIZE_T n = 0; while (s[n]) ++n; return n + 1;
+        };
+        auto align8 = [](SIZE_T v) -> SIZE_T { return (v + 7) & ~(SIZE_T)7; };
+
+        SIZE_T dllBytes   = wbytes(dllAbs);
+        SIZE_T funcBytes  = abytes(params->FunctionName);
+        SIZE_T mhookBytes = wbytes(mhookAbs);
+        SIZE_T udBytes    = params->UserDataSize;
+
+        SIZE_T off     = MHOOK_PROXY_DATA_BASE;
+        SIZE_T dllOff   = off; off = align8(off + dllBytes);
+        SIZE_T funcOff  = off; off = align8(off + funcBytes);
+        SIZE_T mhookOff = mhookBytes ? off : 0; if (mhookBytes) off = align8(off + mhookBytes);
+        SIZE_T udOff    = udBytes ? off : 0;    if (udBytes)    off = align8(off + udBytes);
+        SIZE_T totalSize = off;
+
+        OBJECT_ATTRIBUTES soa;
+        InitializeObjectAttributes(&soa, NULL, OBJ_INHERIT, NULL, NULL);
+        LARGE_INTEGER maxSize; maxSize.QuadPart = (LONGLONG)totalSize;
+        st = NtCreateSection(&hSection, SECTION_MAP_READ | SECTION_MAP_WRITE, &soa,
+                             &maxSize, PAGE_READWRITE, SEC_COMMIT, NULL);
+        if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; }
+
+        SIZE_T viewSize = 0;
+        st = NtMapViewOfSection(hSection, NtCurrentProcess(), &sectionView, 0, 0, NULL,
+                                &viewSize, ViewUnmap, 0, PAGE_READWRITE);
+        if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; }
+
+        // Completion event (manual-reset) and an access-preserving, inheritable dup of
+        // the target handle.
+        OBJECT_ATTRIBUTES eoa;
+        InitializeObjectAttributes(&eoa, NULL, OBJ_INHERIT, NULL, NULL);
+        st = NtCreateEvent(&hEvent, EVENT_ALL_ACCESS, &eoa, NotificationEvent, FALSE);
+        if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; }
+        st = NtDuplicateObject(NtCurrentProcess(), params->TargetProcess, NtCurrentProcess(),
+                               &hTargetInherit, 0, OBJ_INHERIT, DUPLICATE_SAME_ACCESS);
+        if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; }
+
+        // Fill the block (section pages are zero-initialised by NtCreateSection).
+        BYTE *bbase = (BYTE *)sectionView;
+        MHOOK_PROXY_BLOCK *blk = (MHOOK_PROXY_BLOCK *)bbase;
+        blk->Magic        = MHOOK_PROXY_MAGIC;
+        blk->Version      = MHOOK_PROXY_VERSION;
+        blk->BlockSize    = (ULONG)totalSize;
+        blk->Flags        = params->Flags & MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT;
+        blk->TimeoutMs    = params->TimeoutMs;
+        blk->EventHandle  = (ULONGLONG)(ULONG_PTR)hEvent;
+        blk->TargetHandle = (ULONGLONG)(ULONG_PTR)hTargetInherit;
+        blk->DllPathOff   = (ULONG)dllOff;   blk->DllPathLen   = (ULONG)dllBytes;
+        blk->FuncNameOff  = (ULONG)funcOff;  blk->FuncNameLen  = (ULONG)funcBytes;
+        blk->MhookPathOff = (ULONG)mhookOff; blk->MhookPathLen = (ULONG)mhookBytes;
+        blk->UserDataOff  = (ULONG)udOff;    blk->UserDataLen  = (ULONG)udBytes;
+        blk->ProxyState   = MHOOK_PROXY_STATE_INIT;
+
+        memcpy(bbase + dllOff,  dllAbs,             dllBytes);
+        memcpy(bbase + funcOff, params->FunctionName, funcBytes);
+        if (mhookBytes) memcpy(bbase + mhookOff, mhookAbs, mhookBytes);
+        if (udBytes)    memcpy(bbase + udOff, params->UserData, udBytes);
+    }
+
+    // Command line: "<proxy>" <inherited section handle as hex>.
+    {
+        WCHAR secHex[20];
+        ProxyHexFormat((ULONG_PTR)hSection, secHex);
+        cmdLine = ProxyBuildCmdLine(proxyPath, secHex);
+        if (!cmdLine) { hr = E_FAIL; goto cleanup; }
+    }
+
+    // Build process parameters and launch the proxy (handles inherited at the same
+    // values; the proxy reads the section handle off its command line).
+    {
+        UNICODE_STRING uImage; ProxyInitUStr(&uImage, proxyPath);
+        UNICODE_STRING uCmd;   ProxyInitUStr(&uCmd,   cmdLine);
+        st = RtlCreateProcessParametersEx(&procParams, &uImage, NULL, NULL, &uCmd,
+                                          NULL, NULL, NULL, NULL, NULL,
+                                          RTL_USER_PROC_PARAMS_NORMALIZED);
+        if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; }
+
+        // Spawn the proxy with NO console: ConsoleHandle = DETACHED_PROCESS stops the
+        // loader allocating a console / spawning conhost.exe (faster, and no window) —
+        // the proxy only ever talks through the shared section.  The SW_HIDE window
+        // flags are kept as a harmless belt-and-suspenders fallback.  Cross-arch safe:
+        // the OS translates these x86-built params into the x64 child, just as it does
+        // CommandLine.
+        {
+            PRTL_USER_PROCESS_PARAMETERS_CMDLINE pp =
+                (PRTL_USER_PROCESS_PARAMETERS_CMDLINE)procParams;
+            pp->ConsoleHandle    = RTL_USER_PROC_DETACHED_PROCESS;
+            pp->WindowFlags     |= STARTF_USESHOWWINDOW;
+            pp->ShowWindowFlags  = SW_HIDE;
+        }
+
+        UNICODE_STRING uNtImage; ProxyInitUStr(&uNtImage, ntImage);
+        RTL_USER_PROCESS_INFORMATION_MIN pi;
+        for (SIZE_T i = 0; i < sizeof(pi); ++i) ((BYTE *)&pi)[i] = 0;
+        pi.Length = sizeof(pi);
+        st = RtlCreateUserProcess(&uNtImage, OBJ_CASE_INSENSITIVE, procParams,
+                                  NULL, NULL, NULL, TRUE, NULL, NULL, &pi);
+        if (!NT_SUCCESS(st)) {
+            hr = (st == (NTSTATUS)0xC0000034L /*STATUS_OBJECT_NAME_NOT_FOUND*/ ||
+                  st == (NTSTATUS)0xC000003AL /*STATUS_OBJECT_PATH_NOT_FOUND*/)
+                 ? MHOOK_INJECT_E_NO_PROXY : MHOOK_INJECT_E_PROXY;
+            goto cleanup;
+        }
+        hProxyProc   = pi.Process;
+        hProxyThread = pi.Thread;
+    }
+
+    st = NtResumeThread(hProxyThread, NULL);
+    if (!NT_SUCCESS(st)) {
+        NtTerminateProcess(hProxyProc, (NTSTATUS)MHOOK_INJECT_E_PROXY);
+        hr = MHOOK_INJECT_E_PROXY;
+        goto cleanup;
+    }
+
+    if (isAsync) {
+        // Async (including pure fire-and-forget): a watcher owns the section/event/
+        // handles + proxy and delivers completion in-process.  It must be spawned even
+        // with no delivery fields, so an early return doesn't unmap the section out
+        // from under the running proxy.
+        MHOOK_PROXY_WATCHER *w = (MHOOK_PROXY_WATCHER *)RtlAllocateHeap(
+            RtlProcessHeap(), HEAP_ZERO_MEMORY, sizeof(MHOOK_PROXY_WATCHER));
+        HANDLE wThread = NULL, hWatcher = NULL;
+        st = w ? STATUS_SUCCESS : STATUS_NO_MEMORY;
+        if (NT_SUCCESS(st) && params->ApcRoutine)
+            st = NtDuplicateObject(NtCurrentProcess(), NtCurrentThread(),
+                                   NtCurrentProcess(), &wThread, THREAD_SET_CONTEXT, 0, 0);
+        if (NT_SUCCESS(st)) {
+            if (params->IoStatusBlock) {
+                IO_STATUS_BLOCK *iosb = (IO_STATUS_BLOCK *)params->IoStatusBlock;
+                iosb->Status      = (NTSTATUS)0x00000103L;   // STATUS_PENDING
+                iosb->Information = 0;
+            }
+            w->CompletionEvent = hEvent;
+            w->ProxyProcess    = hProxyProc;
+            w->SectionView     = sectionView;
+            w->SectionHandle   = hSection;
+            w->TargetInherit   = hTargetInherit;
+            w->IoStatusBlock   = params->IoStatusBlock;
+            w->CallerThread    = wThread;
+            w->ApcRoutine      = (PVOID)params->ApcRoutine;
+            w->ApcContext      = params->ApcContext;
+            w->UserEvent       = params->Event;
+            w->TimeoutMs       = params->TimeoutMs;
+            st = NtCreateThreadEx(&hWatcher, THREAD_ALL_ACCESS, NULL, NtCurrentProcess(),
+                                  (PVOID)ProxyWatcherProc, w, 0, 0, 0, 0, NULL);
+        }
+        if (!NT_SUCCESS(st)) {
+            if (wThread) NtClose(wThread);
+            if (w) RtlFreeHeap(RtlProcessHeap(), 0, w);
+            NtTerminateProcess(hProxyProc, (NTSTATUS)MHOOK_INJECT_E_PROXY);
+            hr = HrFromNt(st);
+            goto cleanup;
+        }
+        NtClose(hWatcher);
+        handedToWatcher = TRUE;     // watcher owns section/event/target/proxy now
+        sectionView = NULL; hSection = NULL; hEvent = NULL;
+        hTargetInherit = NULL; hProxyProc = NULL;
+        hr = S_OK;
+        goto cleanup;
+    }
+
+    // Synchronous: wait on {completion event, proxy process}, bounded by TimeoutMs
+    // (the proxy waits out any DELAY_UNTIL_INIT internally; the caller is the single
+    // timeout owner and force-terminates the proxy on timeout).
+    {
+        HANDLE   handles[2] = { hEvent, hProxyProc };
+        NTSTATUS waitSt;
+        if (params->TimeoutMs == INFINITE) {
+            waitSt = NtWaitForMultipleObjects(2, handles, WaitAny, FALSE, NULL);
+        } else {
+            ULONG ms = params->TimeoutMs ? params->TimeoutMs : 30000u;
+            LARGE_INTEGER rel; rel.QuadPart = -(LONGLONG)__emulu(ms, 10000u);
+            waitSt = NtWaitForMultipleObjects(2, handles, WaitAny, FALSE, &rel);
+        }
+        hr = ProxyResolveStatus(waitSt, (volatile MHOOK_PROXY_BLOCK *)sectionView);
+        if (waitSt == STATUS_TIMEOUT)
+            NtTerminateProcess(hProxyProc, (NTSTATUS)MHOOK_INJECT_E_TIMEOUT);
+    }
+
+cleanup:
+    if (!handedToWatcher) {
+        if (sectionView)    NtUnmapViewOfSection(NtCurrentProcess(), sectionView);
+        if (hSection)       NtClose(hSection);
+        if (hEvent)         NtClose(hEvent);
+        if (hTargetInherit) NtClose(hTargetInherit);
+        if (hProxyProc)     NtClose(hProxyProc);
+    }
+    if (hProxyThread) NtClose(hProxyThread);
+    if (procParams)   RtlDestroyProcessParameters(procParams);
+    HeapFreePath(selfPath);
+    HeapFreePath(selfDir);
+    HeapFreePath(proxyPath);
+    HeapFreePath(ntImage);
+    HeapFreePath(dllAbs);
+    HeapFreePath(mhookAbs);
+    HeapFreePath(cmdLine);
+    return hr;
+}
+#endif // !_M_X64
+
 // ---------------------------------------------------------------------------
 // Mhook_Inject
 // ---------------------------------------------------------------------------
@@ -674,7 +1098,9 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
 #ifdef _M_X64
     crossTo32 = targetIs32;                 // 64-bit injector + WOW64 target = cross 64->32
 #else
-    if (!targetIs32) return E_NOTIMPL;      // 32-bit injector + 64-bit target: deferred
+    // 32-bit injector + 64-bit target: a WOW64 process can't create a 64-bit thread,
+    // so delegate to a native x64 proxy executable (see InjectViaProxy above).
+    if (!targetIs32) return InjectViaProxy(params);
 #endif
 
     if (crossTo32) {

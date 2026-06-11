@@ -1181,16 +1181,103 @@ TEST(MhookInjectTest, CrossArch_RejectsUnsupportedModes)
 
 #else  // !_M_X64  — the 32-bit injector
 
-// 32-bit -> 64-bit injection is deliberately not implemented; it must report
-// E_NOTIMPL rather than misbehave.  A 32-bit process must launch the native
-// 64-bit cmd.exe through the Sysnative alias (System32 is redirected to SysWOW64).
-TEST(MhookInjectTest, CrossArch_32to64StillNotImplemented)
+// ===========================================================================
+// Cross-architecture injection (32-bit WOW64 injector -> 64-bit target) via the
+// native x64 proxy executable (mhook_inject_proxy.exe).
+//
+// The bundled proxy is self-contained / ntdll-only and uses static-link injection
+// semantics, so it needs a STATIC-style x64 companion (one that exports
+// _internal_Execute).  Those, plus the proxy itself, exist only in the x64 *static*
+// configs (Debug/Release).  So these tests run from the x86 *static* configs reading
+// the matching x64 static siblings; in the *Dynamic* x86 configs the proxy isn't
+// present and they GTEST_SKIP.  (The no-proxy test runs everywhere.)
+//
+// Build order matters: the x64 proxy + x64 companion must be built before the x86
+// tests run.  The default `.\build.ps1` builds all x64 configs before x86, so this
+// is satisfied; a lone `.\build.ps1 -Arch x86` will leave these skipped.
+// ===========================================================================
+
+namespace {
+// The x64 sibling of this x86 test's output dir (…\mhook-unit-tests\x64\<config>\),
+// where the build copies the x64 test companion.  "" if not a Win32/<config> layout.
+std::wstring SiblingX64Dir()
+{
+    std::wstring d = GetTestExeDir();
+    size_t pos = d.rfind(L"\\Win32\\");
+    if (pos == std::wstring::npos) return L"";
+    d.replace(pos, 7, L"\\x64\\");      // "\Win32\" -> "\x64\"
+    return d;
+}
+
+// The bundled x64 proxy exe in its own artifact tree, same config as this test.
+std::wstring ProxyExePath()
+{
+    std::wstring d = GetTestExeDir();
+    const std::wstring from = L"mhook-unit-tests\\Win32\\";
+    size_t pos = d.rfind(from);
+    if (pos == std::wstring::npos) return L"";
+    d.replace(pos, from.size(), L"mhook_inject_proxy\\x64\\");
+    return d + L"mhook_inject_proxy.exe";
+}
+
+// The native 64-bit cmd.exe via the Sysnative alias (a WOW64 process referencing
+// Sysnative is NOT redirected to SysWOW64).
+bool Get64BitCmdPath(std::wstring &out)
 {
     wchar_t win[MAX_PATH];
     UINT n = GetWindowsDirectoryW(win, MAX_PATH);
-    if (!n || n >= MAX_PATH) GTEST_SKIP() << "GetWindowsDirectory failed";
-    std::wstring cmd64 = std::wstring(win) + L"\\Sysnative\\cmd.exe";
-    if (!FileExists(cmd64)) GTEST_SKIP() << "no 64-bit cmd.exe via Sysnative (32-bit-only OS?)";
+    if (!n || n >= MAX_PATH) return false;
+    out = std::wstring(win) + L"\\Sysnative\\cmd.exe";
+    return FileExists(out);
+}
+
+// Resume the target after a delay sized for the PROXY delayed path: the proxy must
+// be launched (RtlCreateUserProcess) + map the section + run its Mhook_Inject to
+// install the entry-point hook before the target's main thread reaches the entry.
+// That chain is longer than the same-arch case (DelayedResumeProc's 500 ms), so use a
+// roomier delay to avoid resuming the suspended cmd before the hook is installed (it
+// would otherwise initialise and self-exit on its NUL stdin before injection lands).
+DWORD WINAPI DelayedResumeProcProxy(LPVOID p)
+{
+    Sleep(2000);
+    ResumeThread((HANDLE)p);
+    return 0;
+}
+
+// Common skip preamble: locate the proxy exe bundle + the x64 companion (and, for
+// dynamic builds, the x64 mhook.dll for MhookDllPath), or skip with a reason.
+bool LocateProxyAssets(std::wstring &proxy, std::wstring &companion,
+                       std::wstring &mhookdll, std::string &why)
+{
+    proxy = ProxyExePath();
+    if (proxy.empty() || !FileExists(proxy)) {
+        why = "x64 proxy not built for this config (run .\\build.ps1 — x64 builds before x86)";
+        return false;
+    }
+    std::wstring x64dir = SiblingX64Dir();
+    if (x64dir.empty()) { why = "test exe is not under .../Win32/<config>/"; return false; }
+    companion = x64dir + L"mhook_inject_test_companion.dll";
+    if (!FileExists(companion)) { why = "x64 companion not built"; return false; }
+    mhookdll = x64dir + L"mhook.dll";   // only needed/used on dynamic builds
+    return true;
+}
+} // namespace
+
+// On dynamic builds the x64 companion is dynamic-style, so the proxy's Mhook_Inject
+// needs the x64 mhook.dll via MhookDllPath; static builds use a self-contained
+// companion and ignore it.  Mirrors the 64->32 CROSS_SET_MHOOK.
+#ifdef MHOOK_STATIC
+#  define CROSS32_SET_MHOOK(p, mh)   ((void)0)
+#else
+#  define CROSS32_SET_MHOOK(p, mh)   ((p).MhookDllPath = (mh).c_str())
+#endif
+
+// No proxy deployed -> the expected, distinct MHOOK_INJECT_E_NO_PROXY (not a crash,
+// not a generic failure).  Runs in every x86 config.
+TEST(MhookInjectTest, CrossArch_32to64_NoProxyReportsNoProxy)
+{
+    std::wstring cmd64;
+    if (!Get64BitCmdPath(cmd64)) GTEST_SKIP() << "no 64-bit cmd.exe via Sysnative (32-bit-only OS?)";
 
     PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
     if (!CreateSuspendedExe(cmd64.c_str(), &pi, &hRead, &hWrite))
@@ -1199,8 +1286,9 @@ TEST(MhookInjectTest, CrossArch_32to64StillNotImplemented)
     MHOOK_INJECT_PARAMS p = {};
     p.Size          = sizeof(p);
     p.TargetProcess = pi.hProcess;
-    p.DllPath       = L"mhook_inject_test_companion.dll";
+    p.DllPath       = L"some_companion.dll";
     p.FunctionName  = "Inject_WriteMarkerAndResume";
+    p.ProxyPath     = L"this_proxy_does_not_exist_zzz.exe";
 
     HRESULT hr = Mhook_Inject(&p);
 
@@ -1208,7 +1296,171 @@ TEST(MhookInjectTest, CrossArch_32to64StillNotImplemented)
     TerminateProcess(pi.hProcess, 1);
     CloseHandle(pi.hProcess); CloseHandle(pi.hThread); if (hRead) CloseHandle(hRead);
 
-    EXPECT_EQ(hr, E_NOTIMPL) << "32->64 injection should report E_NOTIMPL; got 0x" << std::hex << hr;
+    EXPECT_EQ(hr, MHOOK_INJECT_E_NO_PROXY)
+        << "expected MHOOK_INJECT_E_NO_PROXY; got 0x" << std::hex << hr;
+}
+
+// Sync: inject the x64 companion into a suspended 64-bit cmd.exe via the proxy and
+// confirm the injected function writes its marker to the target's stdout.
+TEST(MhookInjectTest, CrossArch_32to64ViaProxy)
+{
+    std::wstring proxy, companion, mhookdll; std::string why;
+    if (!LocateProxyAssets(proxy, companion, mhookdll, why)) GTEST_SKIP() << why;
+    std::wstring cmd64;
+    if (!Get64BitCmdPath(cmd64)) GTEST_SKIP() << "no Sysnative\\cmd.exe";
+
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedExe(cmd64.c_str(), &pi, &hRead, &hWrite))
+        GTEST_SKIP() << "could not create 64-bit cmd.exe (" << GetLastError() << ")";
+
+    MHOOK_INJECT_PARAMS p = {};
+    p.Size          = sizeof(p);
+    p.TargetProcess = pi.hProcess;
+    p.DllPath       = companion.c_str();
+    p.FunctionName  = "Inject_WriteMarkerAndResume";
+    p.ProxyPath     = proxy.c_str();
+    CROSS32_SET_MHOOK(p, mhookdll);
+
+    HRESULT hr = Mhook_Inject(&p);
+    if (SUCCEEDED(hr)) ResumeThread(pi.hThread);
+
+    CloseHandle(hWrite);
+    std::string output = DrainPipe(hRead, 15000);
+    WaitForSingleObject(pi.hProcess, 5000);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead);
+
+    EXPECT_HRESULT_SUCCEEDED(hr) << "32->64 via proxy failed: 0x" << std::hex << hr;
+    EXPECT_TRUE(output.find("MHOOK_INJECT_OK") != std::string::npos)
+        << "marker not found. Output: [" << output << "]";
+}
+
+// Sync + DELAY_UNTIL_INIT: the proxy defers until the target's loader init; the main
+// thread must be allowed to run for the entry-point hook to fire, so resume it on a
+// helper thread while Mhook_Inject (and, through it, the proxy) is blocked.
+TEST(MhookInjectTest, CrossArch_32to64ViaProxy_Delay)
+{
+    std::wstring proxy, companion, mhookdll; std::string why;
+    if (!LocateProxyAssets(proxy, companion, mhookdll, why)) GTEST_SKIP() << why;
+    std::wstring cmd64;
+    if (!Get64BitCmdPath(cmd64)) GTEST_SKIP() << "no Sysnative\\cmd.exe";
+
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedExe(cmd64.c_str(), &pi, &hRead, &hWrite))
+        GTEST_SKIP() << "could not create 64-bit cmd.exe (" << GetLastError() << ")";
+
+    MHOOK_INJECT_PARAMS p = {};
+    p.Size          = sizeof(p);
+    p.TargetProcess = pi.hProcess;
+    p.DllPath       = companion.c_str();
+    p.FunctionName  = "Inject_WriteMarkerAndResume";
+    p.Flags         = MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT;
+    p.ProxyPath     = proxy.c_str();
+    CROSS32_SET_MHOOK(p, mhookdll);
+
+    HANDLE hResume = CreateThread(NULL, 0, DelayedResumeProcProxy, pi.hThread, 0, NULL);
+    HRESULT hr = Mhook_Inject(&p);
+    if (hResume) { WaitForSingleObject(hResume, 5000); CloseHandle(hResume); }
+
+    CloseHandle(hWrite);
+    std::string output = DrainPipe(hRead, 15000);
+    WaitForSingleObject(pi.hProcess, 5000);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead);
+
+    EXPECT_HRESULT_SUCCEEDED(hr) << "32->64 delayed via proxy failed: 0x" << std::hex << hr;
+    EXPECT_TRUE(output.find("MHOOK_INJECT_OK") != std::string::npos)
+        << "marker not found. Output: [" << output << "]";
+}
+
+// Async + Event: completion is delivered by the caller-side proxy watcher signalling
+// the user event once the proxy reports done.
+TEST(MhookInjectTest, CrossArch_32to64ViaProxy_AsyncEvent)
+{
+    std::wstring proxy, companion, mhookdll; std::string why;
+    if (!LocateProxyAssets(proxy, companion, mhookdll, why)) GTEST_SKIP() << why;
+    std::wstring cmd64;
+    if (!Get64BitCmdPath(cmd64)) GTEST_SKIP() << "no Sysnative\\cmd.exe";
+
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedExe(cmd64.c_str(), &pi, &hRead, &hWrite))
+        GTEST_SKIP() << "could not create 64-bit cmd.exe (" << GetLastError() << ")";
+
+    HANDLE hEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+    ASSERT_NE(hEvent, (HANDLE)NULL);
+
+    MHOOK_INJECT_PARAMS p = {};
+    p.Size          = sizeof(p);
+    p.TargetProcess = pi.hProcess;
+    p.DllPath       = companion.c_str();
+    p.FunctionName  = "Inject_WriteMarkerAndResume";
+    p.Flags         = MHOOK_INJECT_FLAG_ASYNC;
+    p.Event         = hEvent;
+    p.ProxyPath     = proxy.c_str();
+    CROSS32_SET_MHOOK(p, mhookdll);
+
+    HRESULT hr = Mhook_Inject(&p);
+    DWORD waited = WaitForSingleObject(hEvent, 15000);
+
+    ResumeThread(pi.hThread);
+    CloseHandle(hWrite);
+    std::string output = DrainPipe(hRead, 15000);
+    WaitForSingleObject(pi.hProcess, 5000);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead); CloseHandle(hEvent);
+
+    EXPECT_HRESULT_SUCCEEDED(hr) << "32->64 async via proxy failed: 0x" << std::hex << hr;
+    EXPECT_EQ(waited, (DWORD)WAIT_OBJECT_0) << "completion event was not signalled";
+    EXPECT_TRUE(output.find("MHOOK_INJECT_OK") != std::string::npos)
+        << "marker not found. Output: [" << output << "]";
+}
+
+// Async + IoStatusBlock: the proxy watcher reads the result from the shared section
+// and fills the caller's IO_STATUS_BLOCK, then signals the Event.
+TEST(MhookInjectTest, CrossArch_32to64ViaProxy_AsyncIoStatusBlock)
+{
+    std::wstring proxy, companion, mhookdll; std::string why;
+    if (!LocateProxyAssets(proxy, companion, mhookdll, why)) GTEST_SKIP() << why;
+    std::wstring cmd64;
+    if (!Get64BitCmdPath(cmd64)) GTEST_SKIP() << "no Sysnative\\cmd.exe";
+
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedExe(cmd64.c_str(), &pi, &hRead, &hWrite))
+        GTEST_SKIP() << "could not create 64-bit cmd.exe (" << GetLastError() << ")";
+
+    HANDLE hEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+    ASSERT_NE(hEvent, (HANDLE)NULL);
+    IO_STATUS_BLOCK iosb;
+    iosb.Status = (NTSTATUS)0x7fffffffL; iosb.Information = 0;
+
+    MHOOK_INJECT_PARAMS p = {};
+    p.Size          = sizeof(p);
+    p.TargetProcess = pi.hProcess;
+    p.DllPath       = companion.c_str();
+    p.FunctionName  = "Inject_WriteMarkerAndResume";
+    p.Flags         = MHOOK_INJECT_FLAG_ASYNC;
+    p.Event         = hEvent;
+    p.IoStatusBlock = &iosb;
+    p.ProxyPath     = proxy.c_str();
+    CROSS32_SET_MHOOK(p, mhookdll);
+
+    HRESULT hr = Mhook_Inject(&p);
+    DWORD waited = WaitForSingleObject(hEvent, 15000);
+    NTSTATUS finalStatus = iosb.Status;
+
+    ResumeThread(pi.hThread);
+    CloseHandle(hWrite);
+    std::string output = DrainPipe(hRead, 15000);
+    WaitForSingleObject(pi.hProcess, 5000);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead); CloseHandle(hEvent);
+
+    EXPECT_HRESULT_SUCCEEDED(hr) << "32->64 async via proxy failed: 0x" << std::hex << hr;
+    EXPECT_EQ(waited, (DWORD)WAIT_OBJECT_0) << "completion event was not signalled";
+    EXPECT_EQ(finalStatus, (NTSTATUS)0)
+        << "IoStatusBlock.Status not S_OK; got 0x" << std::hex << finalStatus;
+    EXPECT_TRUE(output.find("MHOOK_INJECT_OK") != std::string::npos)
+        << "marker not found. Output: [" << output << "]";
 }
 
 #endif // _M_X64

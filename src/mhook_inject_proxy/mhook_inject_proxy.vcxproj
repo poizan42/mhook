@@ -1,0 +1,149 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <!-- mhook_inject_proxy.exe — the bundled native x64 proxy used for 32-bit -> 64-bit
+       injection.  It follows the library's own static/dynamic split:
+
+         * static configs (Debug/Release): links the static x64 mhook_inject.lib +
+           mhook.lib → a self-contained, ntdll-only exe with NO DLL dependencies.
+           Deploy it flat next to the (static) module that calls Mhook_Inject.
+
+         * dynamic configs (DebugDynamic/ReleaseDynamic): links the import libs →
+           imports the x64 mhook_inject.dll (and the target loads mhook.dll via
+           MhookDllPath).  A post-build step copies the x64 mhook_inject.dll + mhook.dll
+           next to the exe, forming a self-contained x64 BUNDLE.  Deploy that whole
+           bundle as a `mhook_inject_proxy\` subdirectory next to the x86 module, so the
+           x64 DLLs don't collide with the x86 same-named ones (the proxy resolves its
+           imports from its own dir).
+
+       x64-only; the Win32 configs are Utility no-ops so the 8-config solution stays
+       green.  The proxy logic (MhookInjectProxyMain + the MhookInjectProxyEntry entry
+       point) is compiled here directly from the shared proxy sources. -->
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|Win32">          <Configuration>Debug</Configuration>          <Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="DebugDynamic|Win32">   <Configuration>DebugDynamic</Configuration>   <Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|Win32">        <Configuration>Release</Configuration>        <Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="ReleaseDynamic|Win32"> <Configuration>ReleaseDynamic</Configuration> <Platform>Win32</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Debug|x64">            <Configuration>Debug</Configuration>          <Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="DebugDynamic|x64">     <Configuration>DebugDynamic</Configuration>   <Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64">          <Configuration>Release</Configuration>        <Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="ReleaseDynamic|x64">   <Configuration>ReleaseDynamic</Configuration> <Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{D8B3F2A5-0C4E-4D7F-9B2A-3E6C8F0D1B24}</ProjectGuid>
+    <RootNamespace>mhook_inject_proxy</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+
+  <!-- Application on all x64 configs, Utility on Win32 -->
+  <PropertyGroup Condition="'$(Platform)'=='x64'" Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug' or '$(Configuration)'=='DebugDynamic'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release' or '$(Configuration)'=='ReleaseDynamic'">false</UseDebugLibraries>
+    <WholeProgramOptimization Condition="'$(Configuration)'=='Release' or '$(Configuration)'=='ReleaseDynamic'">true</WholeProgramOptimization>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Platform)'=='Win32'" Label="Configuration">
+    <ConfigurationType>Utility</ConfigurationType>
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <!-- Literal folder name (not $(ShortProjectName), which shortens long names to
+       "mhook_in.<guid>") so artifact paths are clean and predictable. -->
+  <PropertyGroup>
+    <TargetName>mhook_inject_proxy</TargetName>
+    <OutDir>$(SolutionDir)\build\artifacts\mhook_inject_proxy\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)\build\obj\mhook_inject_proxy\$(Platform)\$(Configuration)\</IntDir>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <WarningLevel>Level3</WarningLevel>
+      <LanguageStandard_C>stdc11</LanguageStandard_C>
+      <!-- ntdll-only: no CRT, so disable /RTC (which would emit _RTC_* calls). -->
+      <BasicRuntimeChecks>Default</BasicRuntimeChecks>
+      <SupportJustMyCode>false</SupportJustMyCode>
+      <SDLCheck>false</SDLCheck>
+      <BufferSecurityCheck>false</BufferSecurityCheck>
+      <OmitDefaultLibName>true</OmitDefaultLibName>
+      <AdditionalIncludeDirectories>$(ProjectDir)..;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <Optimization Condition="'$(Configuration)'=='Release' or '$(Configuration)'=='ReleaseDynamic'">MaxSpeed</Optimization>
+      <Optimization Condition="'$(Configuration)'=='Debug' or '$(Configuration)'=='DebugDynamic'">Disabled</Optimization>
+      <IntrinsicFunctions>true</IntrinsicFunctions>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Release' or '$(Configuration)'=='ReleaseDynamic'">MultiThreaded</RuntimeLibrary>
+      <PreprocessorDefinitions Condition="'$(Configuration)'=='Debug' or '$(Configuration)'=='DebugDynamic'">_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)'=='Release' or '$(Configuration)'=='ReleaseDynamic'">NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <!-- Console subsystem; the launcher hides the window via the process parameters'
+           WindowFlags/ShowWindowFlags (STARTF_USESHOWWINDOW + SW_HIDE), the same way
+           CreateProcess + STARTUPINFO does — see InjectViaProxy. -->
+      <SubSystem>Console</SubSystem>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
+      <AdditionalDependencies>ntdll.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <IgnoreAllDefaultLibraries>true</IgnoreAllDefaultLibraries>
+      <EntryPointSymbol>MhookInjectProxyEntry</EntryPointSymbol>
+      <EnableCOMDATFolding Condition="'$(Configuration)'=='Release' or '$(Configuration)'=='ReleaseDynamic'">true</EnableCOMDATFolding>
+      <OptimizeReferences Condition="'$(Configuration)'=='Release' or '$(Configuration)'=='ReleaseDynamic'">true</OptimizeReferences>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- Proxy logic compiled directly so the exe is independent of the static-only lib.
+       (Utility Win32 configs ignore ClCompile items.) -->
+  <ItemGroup>
+    <ClCompile Include="proxy_main.c" />
+    <ClCompile Include="proxy_entry.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="..\mhook-inject\inject_proxy_params.h" />
+  </ItemGroup>
+
+  <!-- References auto-link each project's output for the active configuration:
+       static configs link the static mhook_inject.lib / mhook.lib (self-contained);
+       dynamic configs link the import libs (import mhook_inject.dll). -->
+  <ItemGroup>
+    <ProjectReference Include="..\mhook-inject\mhook_inject.vcxproj">
+      <Project>{A3B7C2D1-5E4F-4A9B-8C3D-2F1E6A0B7C94}</Project>
+    </ProjectReference>
+    <!-- mhook.lib is only linked into the self-contained STATIC proxy (for
+         inject_entry.c's Mhook_SetHook/Unhook).  The dynamic proxy doesn't import
+         mhook.dll — the target loads it via MhookDllPath. -->
+    <ProjectReference Include="..\libmhook.vcxproj"
+                      Condition="'$(Configuration)'=='Debug' or '$(Configuration)'=='Release'">
+      <Project>{9AF4E83D-3670-44C8-84B9-54FFD4AFFF21}</Project>
+    </ProjectReference>
+    <ProjectReference Include="..\ntdll_extra_stub\ntdll_extra_stub.vcxproj">
+      <Project>{B1E3F8C2-4A5D-4F9E-8B2C-1D6E7A3F9B04}</Project>
+    </ProjectReference>
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+  <!-- Dynamic configs: assemble the self-contained x64 bundle by copying the x64
+       mhook_inject.dll + mhook.dll (which the proxy imports / the target loads) next to
+       the exe.  Exists-guarded so a partial build doesn't fail. -->
+  <Target Name="CopyProxyRuntimeDlls"
+          AfterTargets="Build"
+          Condition="'$(Platform)'=='x64' and ('$(Configuration)'=='DebugDynamic' or '$(Configuration)'=='ReleaseDynamic')">
+    <ItemGroup>
+      <_ProxyBundleDll Include="$(SolutionDir)build\artifacts\mhook_inject\x64\$(Configuration)\mhook_inject.dll" />
+      <_ProxyBundleDll Include="$(SolutionDir)build\artifacts\mhook_inject\x64\$(Configuration)\mhook_inject.pdb" />
+      <_ProxyBundleDll Include="$(SolutionDir)build\artifacts\libmhook\x64\$(Configuration)\mhook.dll" />
+      <_ProxyBundleDll Include="$(SolutionDir)build\artifacts\libmhook\x64\$(Configuration)\mhook.pdb" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_ProxyBundleDll)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('%(_ProxyBundleDll.FullPath)')" />
+  </Target>
+</Project>

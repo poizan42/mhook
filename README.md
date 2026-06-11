@@ -263,8 +263,77 @@ target must be 32-bit:
   bounded by `TimeoutMs` (a target that dies before completing surfaces as a timeout
   `NTSTATUS`) and arrive a moment after completion rather than from the target itself.
 
-The reverse direction (32-bit → 64-bit) is **not implemented** and returns `E_NOTIMPL`
-— there is no clean, ntdll-only way to create a 64-bit thread from a WOW64 process.
+### Cross-architecture injection (32-bit → 64-bit, via a proxy)
+
+A WOW64 process has no ntdll-only way to create a 64-bit thread, so the reverse
+direction is supported **indirectly**: `Mhook_Inject` launches a native **x64 proxy
+executable** (`mhook_inject_proxy.exe`, via `RtlCreateUserProcess`) that performs the
+injection on the caller's behalf and reports the result back.
+
+- Use the **`DllPath` + `FunctionName`** form pointing at the **x64** companion (the
+  `FunctionPointer` form is rejected). The companion requirements mirror the same-arch
+  ones for your build flavour:
+  - **dynamic** builds: set `MhookDllPath` to the x64 `mhook.dll`; `DllPath` is your x64
+    function DLL (loaded into the target alongside the x64 `mhook_inject.dll` companion).
+  - **static** builds: `DllPath` names a self-contained x64 companion that exports
+    `_internal_Execute` (built linking the x64 `mhook_inject.lib` + `mhook.lib`);
+    `MhookDllPath` is unused.
+- If no proxy is found the call returns **`MHOOK_INJECT_E_NO_PROXY`** — the expected
+  way to detect that 32→64 is not configured on this install. If a proxy is found but
+  fails to launch or crashes before reporting, **`MHOOK_INJECT_E_PROXY`**.
+- All completion modes work: synchronous (incl. `DELAY_UNTIL_INIT`), `Event`,
+  `IoStatusBlock`, and `ApcRoutine`. Async completion is delivered by an internal
+  caller-side watcher thread once the proxy reports done (bounded by `TimeoutMs`).
+
+**The proxy follows the library's own static/dynamic split:**
+
+- **Dynamic** builds produce a self-contained x64 *bundle* — `mhook_inject_proxy.exe`
+  plus the x64 `mhook_inject.dll` + `mhook.dll` it loads. Deploy the whole bundle as a
+  `mhook_inject_proxy\` subdirectory next to your x86 module, so the x64 DLLs don't
+  collide with the x86 same-named ones (the proxy resolves its imports from its own
+  directory):
+
+  ```
+  <app>/
+    yourapp.exe          (x86)        mhook_inject.dll (x86)   mhook.dll (x86)
+    mhook_inject_proxy/  (x64 bundle)
+      mhook_inject_proxy.exe   mhook_inject.dll (x64)   mhook.dll (x64)
+  ```
+
+- **Static** builds produce a single self-contained `mhook_inject_proxy.exe` (no DLL
+  deps) — drop it flat next to your module — **and** `mhook_inject_proxy.lib` (exposing
+  `MhookInjectProxyMain()` and an optional `MhookInjectProxyEntry` entry point) for you
+  to link into your own x64 executable.
+
+`ProxyPath` selects the proxy. With `NULL`, `Mhook_Inject` probes, relative to the
+module that contains it, `mhook_inject_proxy.exe` (flat, static) then
+`mhook_inject_proxy\mhook_inject_proxy.exe` (the dynamic bundle); an explicit path is
+used verbatim. A consumer who needs different behaviour can implement their own proxy
+against the documented wire contract below, or not support 32→64 at all.
+
+> **Build order:** the x64 proxy must be built before the x86 binary that uses it.
+> The default `.\build.ps1` builds all x64 configs before x86, so this is satisfied;
+> a lone `.\build.ps1 -Arch x86` will not produce the proxy.
+
+#### Proxy wire contract
+
+The caller ↔ proxy protocol (see `src/mhook-inject/inject_proxy_params.h`) is a stable,
+versioned public contract, so a third party can implement a proxy without linking the
+mhook libraries:
+
+1. The caller creates a page-file-backed **section** holding a fixed-width
+   `MHOOK_PROXY_BLOCK` header (magic `'MPXY'`, version, flags, timeout, the inherited
+   event + target handle values, and offset/length pairs for the dll path / function
+   name / mhook path / user-data blob), followed by that variable data.
+2. The section, a manual-reset completion event, and an access-preserving duplicate of
+   the target handle are all made **inheritable**; the proxy is launched with
+   `InheritHandles = TRUE`, so it receives them at identical handle values. The
+   **section handle is the last whitespace-delimited token on the proxy command line**
+   (hex, no `0x`); the event and target handle values live in the block.
+3. The proxy maps the section, validates magic/version, reconstructs an x64
+   `MHOOK_INJECT_PARAMS`, performs a same-arch 64→64 injection, writes `ResultHr`
+   (then `ResultStatus`, then `ProxyState = DONE`) and finally signals the event. The
+   event signal is the synchronizing edge; `ResultHr` is written before it.
 
 ### `MHOOK_INJECT_CONTEXT` (received by the injected function)
 

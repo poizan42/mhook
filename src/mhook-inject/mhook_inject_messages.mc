@@ -2,14 +2,14 @@
 ;//
 ;// Compiled with "mc -c", which sets the Customer bit (0x20000000) in every message ID,
 ;// so the generated IDs equal the public HRESULTs in mhook_inject.h
-;// (0xA0000001..0xA0000005).  Severity "Failure" is value 0x2 (-> bit 31); a non-built-in
+;// (0xA0000001..0xA0000007).  Severity "Failure" is value 0x2 (-> bit 31); a non-built-in
 ;// name is used so mc does not warn "Redefining value of Error".
 ;//
 ;// This resource is embedded only in mhook_inject.dll (dynamic builds); consumers look up
 ;// the strings with FormatMessage(FORMAT_MESSAGE_FROM_HMODULE, GetModuleHandle(
 ;// L"mhook_inject.dll"), hr, ...).
 ;//
-;// IMPORTANT: keep MessageId 0x1..0x5 in sync with the MHOOK_INJECT_E_* defines in
+;// IMPORTANT: keep MessageId 0x1..0x7 in sync with the MHOOK_INJECT_E_* defines in
 ;// mhook_inject.h.  The generated header is NOT included anywhere - mhook_inject.h remains
 ;// the single source of truth for the public constants.
 
@@ -59,4 +59,20 @@ Facility=Inject
 SymbolicName=MHOOK_INJECT_E_ACCESS_MSG
 Language=English
 The target process handle was not granted PROCESS_ALL_ACCESS.
+.
+
+MessageId=0x6
+Severity=Failure
+Facility=Inject
+SymbolicName=MHOOK_INJECT_E_NO_PROXY_MSG
+Language=English
+No x64 proxy executable was found; 32-bit to 64-bit injection is unavailable. Deploy mhook_inject_proxy.exe alongside the module or set MHOOK_INJECT_PARAMS.ProxyPath.
+.
+
+MessageId=0x7
+Severity=Failure
+Facility=Inject
+SymbolicName=MHOOK_INJECT_E_PROXY_MSG
+Language=English
+The x64 proxy process failed to launch or exited before reporting completion.
 .

@@ -82,6 +82,10 @@ typedef VOID (NTAPI *PIO_APC_ROUTINE)(
 #define MHOOK_INJECT_E_NO_EXEC   ((HRESULT)0xA0000003L)  // _internal_Execute not found in companion DLL
 #define MHOOK_INJECT_E_TIMEOUT   ((HRESULT)0xA0000004L)  // remote thread timed out
 #define MHOOK_INJECT_E_ACCESS    ((HRESULT)0xA0000005L)  // target handle lacks PROCESS_ALL_ACCESS
+// 32-bit -> 64-bit injection requires an x64 proxy executable (see ProxyPath and the
+// "32-bit caller -> 64-bit target" notes on Mhook_Inject below).
+#define MHOOK_INJECT_E_NO_PROXY  ((HRESULT)0xA0000006L)  // no x64 proxy executable found; 32->64 unavailable
+#define MHOOK_INJECT_E_PROXY     ((HRESULT)0xA0000007L)  // proxy found but failed to launch / crashed before reporting
 
 // ---------------------------------------------------------------------------
 // MHOOK_INJECT_PARAMS — input to Mhook_Inject (calling process)
@@ -177,6 +181,22 @@ typedef struct _MHOOK_INJECT_PARAMS {
     // requires PROCESS_ALL_ACCESS on the target).  NULL if unused.
     PIO_STATUS_BLOCK   IoStatusBlock;
 
+    // -----------------------------------------------------------------------
+    // Proxy — only meaningful on the 32-bit caller -> 64-bit target path.
+    // -----------------------------------------------------------------------
+
+    // Optional.  Path to the x64 proxy executable used for 32-bit -> 64-bit
+    // injection (a WOW64 process cannot create a 64-bit thread, so the work is
+    // delegated to a native 64-bit helper process — see the notes on Mhook_Inject).
+    //   NULL → look for "mhook_inject_proxy.exe" in the same directory as the
+    //          module that contains Mhook_Inject.
+    //   else → resolved relative to that module's directory (an absolute path
+    //          passes through), consistent with DllPath / MhookDllPath.
+    // If no proxy is found Mhook_Inject returns MHOOK_INJECT_E_NO_PROXY — the
+    // expected way to detect that 32->64 injection is not configured on this
+    // install.  Ignored on every path other than 32-bit caller -> 64-bit target.
+    PCWSTR             ProxyPath;
+
 } MHOOK_INJECT_PARAMS;
 
 // ---------------------------------------------------------------------------
@@ -228,7 +248,34 @@ typedef void (__cdecl *MhookInjectedFn)(MHOOK_INJECT_CONTEXT *ctx);
 // helper thread once the target signals completion — so it is bounded by TimeoutMs
 // (a target that dies before completing surfaces as a timeout NTSTATUS), and the
 // delivery happens a moment after completion rather than from the target directly.
-// The reverse (32-bit caller -> 64-bit target) is not implemented (E_NOTIMPL).
+//
+// The reverse — a 32-bit (WOW64) caller injecting into a 64-bit target — is also
+// supported, but indirectly: a WOW64 process has no ntdll-only way to create a
+// 64-bit thread, so Mhook_Inject launches a native x64 proxy executable (see
+// ProxyPath) that performs the injection on its behalf and reports the result back.
+// Use the DllPath + FunctionName form naming an x64 companion (the FunctionPointer
+// form is rejected with MHOOK_INJECT_E_PARAMS).  The companion requirements mirror
+// the same-arch ones for your build flavour:
+//   - dynamic builds: set MhookDllPath to the x64 mhook.dll; DllPath is your x64
+//     function DLL (loaded into the target alongside the x64 mhook_inject.dll
+//     companion).  The bundled proxy is the matching x64 mhook_inject_proxy bundle.
+//   - static builds: DllPath names a self-contained x64 companion that exports
+//     _internal_Execute (built linking the x64 mhook_inject.lib + mhook.lib);
+//     MhookDllPath is unused.
+// All completion modes work (synchronous, Event, IoStatusBlock, ApcRoutine — the
+// latter delivered by a caller-side helper thread).  If no proxy executable is found
+// the call returns MHOOK_INJECT_E_NO_PROXY (the expected result when 32->64 is not
+// configured); if a proxy is found but fails to launch or crashes before reporting,
+// MHOOK_INJECT_E_PROXY.
+//
+// Deployment: the dynamic proxy ships as a self-contained x64 bundle
+// (mhook_inject_proxy.exe + x64 mhook_inject.dll + mhook.dll) — drop it as a
+// `mhook_inject_proxy\` subdirectory next to your x86 module; the static proxy is a
+// single self-contained exe placed flat.  With ProxyPath = NULL, Mhook_Inject probes
+// both (`mhook_inject_proxy.exe`, then `mhook_inject_proxy\mhook_inject_proxy.exe`).
+// Consumers can also supply their own proxy via ProxyPath that implements the
+// documented wire contract in inject_proxy_params.h, or link mhook_inject_proxy.lib
+// into their own executable.
 // ---------------------------------------------------------------------------
 
 HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params);
