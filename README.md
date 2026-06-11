@@ -265,10 +265,13 @@ target must be 32-bit:
 
 ### Cross-architecture injection (32-bit → 64-bit, via a proxy)
 
-A WOW64 process has no ntdll-only way to create a 64-bit thread, so the reverse
-direction is supported **indirectly**: `Mhook_Inject` launches a native **x64 proxy
-executable** (`mhook_inject_proxy.exe`, via `RtlCreateUserProcess`) that performs the
-injection on the caller's behalf and reports the result back.
+A WOW64 process has no ntdll-only way to create a 64-bit thread[^wow64thread], so the
+reverse direction is supported **indirectly**: `Mhook_Inject` launches a native **x64
+proxy executable** (`mhook_inject_proxy.exe`, via `RtlCreateUserProcess`) that performs
+the injection on the caller's behalf and reports the result back.
+
+[^wow64thread]: Outside of hacks that manually transition the thread to 64-bit mode,
+    which AV/EDR software frequently flags.
 
 - Use the **`DllPath` + `FunctionName`** form pointing at the **x64** companion (the
   `FunctionPointer` form is rejected). The companion requirements mirror the same-arch
