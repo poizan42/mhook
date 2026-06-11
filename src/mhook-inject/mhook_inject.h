@@ -134,6 +134,20 @@ typedef struct _MHOOK_INJECT_PARAMS {
     PVOID  UserData;
     SIZE_T UserDataSize;
 
+    // Completion timeout for the SYNCHRONOUS modes, in milliseconds.  Ignored
+    // when MHOOK_INJECT_FLAG_ASYNC is set (that mode never waits).
+    //   0          → default of 30 000 ms (30 s).
+    //   INFINITE   → no timeout; wait forever.
+    //   other      → that many milliseconds.
+    // Values with the sign bit set other than INFINITE (0x80000000–0xFFFFFFFE,
+    // i.e. would-be-negative) are rejected with MHOOK_INJECT_E_PARAMS.
+    // This is the TOTAL budget across both internal wait phases (the bootstrap
+    // thread, then — under DELAY_UNTIL_INIT — the entry-point hook): time spent
+    // waiting on the first reduces what remains for the second.  The wait is
+    // measured against the monotonic unbiased interrupt time, so it is immune to
+    // wall-clock changes and does not count time the system spent asleep.
+    ULONG  TimeoutMs;
+
     // -----------------------------------------------------------------------
     // Async completion — only meaningful when MHOOK_INJECT_FLAG_ASYNC is set.
     // All fields are optional; set unused ones to NULL.  When all are NULL and

@@ -543,6 +543,98 @@ TEST(MhookInjectTest, SyncDelayBlocksUntilHookFires)
         << " Output: [" << output << "]";
 }
 
+// A custom (short) TimeoutMs is honoured: sync + DELAY_UNTIL_INIT into a
+// suspended cmd.exe that is never resumed.  The bootstrap thread installs the
+// entry-point hook and exits, but the hook can never fire (the main thread stays
+// suspended), so the completion wait runs out the budget and Mhook_Inject returns
+// MHOOK_INJECT_E_TIMEOUT — fast (≈1.5 s), proving the configured value was used
+// rather than the 30 s default.
+TEST(MhookInjectTest, CustomTimeoutFires)
+{
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedCmd(&pi, &hRead, &hWrite))
+        GTEST_SKIP() << "Could not create cmd.exe (" << GetLastError() << ")";
+
+    MHOOK_INJECT_PARAMS params = {};
+    params.Size          = sizeof(params);
+    params.TargetProcess = pi.hProcess;
+    params.DllPath       = L"mhook_inject_test_companion.dll";
+    params.FunctionName  = "Inject_WriteMarkerAndResume";
+    params.Flags         = MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT;
+    params.TimeoutMs     = 1500;
+
+    ULONGLONG t0 = GetTickCount64();
+    HRESULT hr = Mhook_Inject(&params);          // never resumed → hook never fires
+    ULONGLONG elapsed = GetTickCount64() - t0;
+
+    CloseHandle(hWrite);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead);
+
+    EXPECT_EQ(hr, MHOOK_INJECT_E_TIMEOUT)
+        << "expected timeout; hr=0x" << std::hex << hr;
+    // Comfortably under the 30 s default, and not instant — proves the 1.5 s budget
+    // drove it (a kernel-timer wait, so accurate even under heavy parallel load).
+    EXPECT_LT(elapsed, 15000u) << "took " << elapsed << " ms (30 s default not honoured?)";
+    EXPECT_GE(elapsed, 1000u)  << "returned too soon (" << elapsed << " ms)";
+}
+
+// A would-be-negative TimeoutMs (sign bit set, not INFINITE) is rejected up front
+// with MHOOK_INJECT_E_PARAMS, before any injection takes place.
+TEST(MhookInjectTest, RejectsNegativeTimeout)
+{
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedCmd(&pi, &hRead, &hWrite))
+        GTEST_SKIP() << "Could not create cmd.exe (" << GetLastError() << ")";
+
+    // Full-access handle + valid function selection, so TimeoutMs is the only fault.
+    MHOOK_INJECT_PARAMS params = {};
+    params.Size          = sizeof(params);
+    params.TargetProcess = pi.hProcess;
+    params.DllPath       = L"mhook_inject_test_companion.dll";
+    params.FunctionName  = "Inject_WriteMarkerAndResume";
+    params.TimeoutMs     = 0x80000000u;          // most-negative; not INFINITE
+
+    HRESULT hr = Mhook_Inject(&params);
+
+    CloseHandle(hWrite);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead);
+
+    EXPECT_EQ(hr, MHOOK_INJECT_E_PARAMS)
+        << "negative TimeoutMs must be rejected; hr=0x" << std::hex << hr;
+}
+
+// TimeoutMs = INFINITE disables the timeout (the wait is passed NULL).  The
+// immediate (non-delay) injection still completes normally and writes its marker.
+TEST(MhookInjectTest, InfiniteTimeoutDisablesTimeout)
+{
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedCmd(&pi, &hRead, &hWrite))
+        GTEST_SKIP() << "Could not create cmd.exe (" << GetLastError() << ")";
+
+    MHOOK_INJECT_PARAMS params = {};
+    params.Size          = sizeof(params);
+    params.TargetProcess = pi.hProcess;
+    params.DllPath       = L"mhook_inject_test_companion.dll";
+    params.FunctionName  = "Inject_WriteMarkerAndResume";
+    params.TimeoutMs     = INFINITE;
+
+    HRESULT hr = Mhook_Inject(&params);          // synchronous; waits with no timeout
+    if (SUCCEEDED(hr)) ResumeThread(pi.hThread);
+
+    CloseHandle(hWrite);
+    std::string output = DrainPipe(hRead, 15000);
+
+    WaitForSingleObject(pi.hProcess, 5000);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead);
+
+    EXPECT_HRESULT_SUCCEEDED(hr) << "infinite-timeout inject failed: 0x" << std::hex << hr;
+    EXPECT_TRUE(output.find("MHOOK_INJECT_OK") != std::string::npos)
+        << "marker not written; Output: [" << output << "]";
+}
+
 // ASYNC, all completion outputs NULL: returns immediately; the fn still runs
 // (immediate path) on the injection thread and writes the marker.
 TEST(MhookInjectTest, AsyncFireAndForget)

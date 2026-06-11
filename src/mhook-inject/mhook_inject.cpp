@@ -11,6 +11,11 @@
 #include "../nt_defs.h"
 #include "inject_params.h"
 
+// The library never includes <windows.h>; define the timeout sentinel locally.
+#ifndef INFINITE
+#define INFINITE 0xFFFFFFFFu
+#endif
+
 // ---------------------------------------------------------------------------
 // Bootstrap-thunk blobs — assembled by MASM, linked as object code
 // ---------------------------------------------------------------------------
@@ -519,6 +524,11 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     if (useFnPtr == useName)
         return MHOOK_INJECT_E_PARAMS;
 
+    // Reject would-be-negative timeouts; INFINITE (all-ones) is the only allowed
+    // sign-bit-set value (means "no timeout").  0 means "use the default".
+    if (params->TimeoutMs >= 0x80000000u && params->TimeoutMs != INFINITE)
+        return MHOOK_INJECT_E_PARAMS;
+
     BOOLEAN isAsync = (params->Flags & MHOOK_INJECT_FLAG_ASYNC) != 0;
     // Synchronous + delay needs an internal kernel event: after the bootstrap
     // thread exits (hook installed), we wait on it until the entry-point hook
@@ -869,13 +879,26 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     // Step 10: Wait for completion (synchronous modes)
     // -----------------------------------------------------------------------
     {
-        LARGE_INTEGER timeout;
-        timeout.QuadPart = -300000000LL;  // 30 s in 100-ns units
+        // TimeoutMs is the TOTAL budget across both waits below.  Measure elapsed
+        // with the monotonic unbiased interrupt time and pass a RELATIVE timeout
+        // (negative) to NtWaitForSingleObject — relative waits are scheduled off
+        // interrupt time, not the wall clock, so the budget is immune to clock
+        // changes and ignores time the system spent asleep.  INFINITE => NULL
+        // (wait forever).
+        BOOLEAN   infinite = (params->TimeoutMs == INFINITE);
+        LONGLONG  budget   = infinite ? 0
+                           : (LONGLONG)(params->TimeoutMs ? params->TimeoutMs : 30000u) * 10000LL;
+        ULONGLONG t0 = 0;
+        if (!infinite) RtlQueryUnbiasedInterruptTime(&t0);
+
+        LARGE_INTEGER  rel;
+        PLARGE_INTEGER pTimeout = NULL;  // NULL => wait forever
+        if (!infinite) { rel.QuadPart = -budget; pTimeout = &rel; }
 
         // Wait for the bootstrap thread.  Its exit status is the NTSTATUS set by
         // FreeAllocationAndExitThread (kept alive by the kernel thread object
         // while hThread is open, even if the target has since exited).
-        st = NtWaitForSingleObject(hThread, FALSE, &timeout);
+        st = NtWaitForSingleObject(hThread, FALSE, pTimeout);
         if (st == STATUS_TIMEOUT) { hr = MHOOK_INJECT_E_TIMEOUT; goto cleanup; }
 
         THREAD_BASIC_INFORMATION tbi = {};
@@ -887,8 +910,15 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
 
         if (needsSyncEvent) {
             // Delay path: the bootstrap thread installed the entry-point hook and
-            // exited; now wait for the hook to fire and the injection fn to return.
-            st = NtWaitForSingleObject(hSyncEvent, FALSE, &timeout);
+            // exited; now wait for the hook to fire and the injection fn to return,
+            // charged against whatever remains of the total budget.
+            if (!infinite) {
+                ULONGLONG now; RtlQueryUnbiasedInterruptTime(&now);
+                LONGLONG remaining = budget - (LONGLONG)(now - t0);
+                if (remaining < 0) remaining = 0;  // budget already spent
+                rel.QuadPart = -remaining;         // 0 => time out immediately
+            }
+            st = NtWaitForSingleObject(hSyncEvent, FALSE, pTimeout);
             hr = (st == STATUS_TIMEOUT) ? MHOOK_INJECT_E_TIMEOUT : S_OK;
         } else {
             hr = S_OK;

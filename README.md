@@ -151,6 +151,13 @@ typedef struct _MHOOK_INJECT_PARAMS {
     PVOID  UserData;
     SIZE_T UserDataSize;
 
+    // Total completion timeout for the synchronous modes, in milliseconds.
+    //   0 = default 30 000 ms;  INFINITE = wait forever;  ignored when ASYNC.
+    //   Would-be-negative values (sign bit set, except INFINITE) are rejected
+    //   with MHOOK_INJECT_E_PARAMS.  Measured against monotonic interrupt time,
+    //   so it is unaffected by wall-clock changes and excludes system sleep.
+    ULONG  TimeoutMs;
+
     // Combination of MHOOK_INJECT_FLAG_* values (see below); 0 = default.
     ULONG  Flags;
 
@@ -236,8 +243,8 @@ WaitForSingleObject(done, INFINITE);    // the injection function has now return
 > **Caveat (synchronous `DELAY_UNTIL_INIT` on a suspended target):** the deferred
 > call fires only when the target's main thread reaches its entry point, so a
 > *synchronous* delayed injection into a `CREATE_SUSPENDED` process blocks until
-> you let the target run (e.g. resume it from another thread) or the 30 s timeout
-> elapses. Resume the target concurrently, or use `ASYNC`.
+> you let the target run (e.g. resume it from another thread) or the timeout
+> (`TimeoutMs`, default 30 s) elapses. Resume the target concurrently, or use `ASYNC`.
 
 ### `MHOOK_INJECT_CONTEXT` (received by the injected function)
 

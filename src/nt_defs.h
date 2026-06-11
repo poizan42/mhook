@@ -736,6 +736,11 @@ NTSTATUS NTAPI NtWaitForSingleObject(
     BOOLEAN         Alertable,
     PLARGE_INTEGER  Timeout);
 
+// Monotonic unbiased interrupt time (100-ns units; excludes sleep/hibernate).
+// Not declared in any SDK header, but exported from ntdll.lib for both arches.
+BOOLEAN NTAPI RtlQueryUnbiasedInterruptTime(
+    PULONGLONG      InterruptTime);
+
 // File I/O
 NTSTATUS NTAPI NtOpenFile(
     PHANDLE             FileHandle,
