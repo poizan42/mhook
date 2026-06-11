@@ -10,16 +10,17 @@
 //      the stdout pipe.
 //   4. The test reads the pipe and asserts the marker is present.
 
-// nt_defs.h is included first to get NTSTATUS, UNICODE_STRING etc.
-// It brings in minwindef.h + winnt.h only (no full Win32 surface), so
-// <windows.h> is included afterwards for the Win32 APIs the test needs.
-#include "../nt_defs.h"
-
-#include <gtest/gtest.h>
+// <windows.h> is included BEFORE nt_defs.h: nt_defs.h adds the NT types this test
+// needs (NTSTATUS, UNICODE_STRING, …) that the lean Win32 surface doesn't provide,
+// while its HRESULT-macro block (S_OK/E_FAIL/…) self-skips once <winerror.h> has
+// defined those — avoiding C4005 macro-redefinition warnings.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <psapi.h>      // GetMappedFileNameW
 #pragma comment(lib, "psapi.lib")
+#include "../nt_defs.h"
+
+#include <gtest/gtest.h>
 #include <string>
 
 // ---------------------------------------------------------------------------

@@ -113,7 +113,7 @@ Several ntdll exports the library uses are absent from the Windows SDK's `ntdll.
 
 Replaces `<windows.h>` throughout the library. Includes only `<minwindef.h>` and `<winnt.h>` (no kernel32/user32 surface). All NT native type definitions (`NTSTATUS`, `UNICODE_STRING`, `NT_PEB`, `PEB_LDR_DATA_MIN`, etc.) and `ntdll` function declarations live here. It also defines the x64 unwind types `UNWIND_INFO` / `UNWIND_CODE` / the `UWOP_*` opcodes (guarded by `#ifdef _M_X64`), which `winnt.h` does **not** provide — but `RUNTIME_FUNCTION` **is** in `winnt.h`, so do not redefine it (a second definition would clash).
 
-**Hard rule:** never include `<windows.h>` in library code (`mhook.cpp`, `inject_entry.c`, `mhook_inject.cpp`, or any header they include). Test code under `src/mhook-unit-tests/` (`tests.cpp`, `inject_test.cpp`, `uninit_test.cpp`) is exempt and uses `<windows.h>` freely.
+**Hard rule:** never include `<windows.h>` in library code (`mhook.cpp`, `inject_entry.c`, `mhook_inject.cpp`, or any header they include). Test code under `src/mhook-unit-tests/` (`tests.cpp`, `inject_test.cpp`, `uninit_test.cpp`) is exempt and uses `<windows.h>` freely. **Gotcha:** a test TU that needs *both* `nt_defs.h` (for NT types like `NTSTATUS`/`UNICODE_STRING`, which the lean Win32 surface doesn't provide) and `<windows.h>` must include `<windows.h>` **first** — `nt_defs.h`'s windows-free fallback macros (the `#ifndef S_OK` HRESULT block, `THREAD_PRIORITY_TIME_CRITICAL`, etc.) are `#ifndef`-guarded and self-skip once the SDK headers have defined them, so this avoids C4005 macro-redefinition warnings (see `uninit_test.cpp`).
 
 ### `disasm-lib` (`src/disasm-lib/`)
 

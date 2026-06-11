@@ -535,7 +535,9 @@ typedef struct _RTL_USER_PROCESS_PARAMETERS_MIN {
 
 #define DPFLTR_DEFAULT_ID               0UL
 #define DPFLTR_INFO_LEVEL               3UL
+#ifndef THREAD_PRIORITY_TIME_CRITICAL   // also defined by <winbase.h> (same value)
 #define THREAD_PRIORITY_TIME_CRITICAL   15
+#endif
 
 // ---------------------------------------------------------------------------
 // Assert replacement — no CRT dependency
