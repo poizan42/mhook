@@ -104,6 +104,8 @@ whole rather than to a Microsoft facility:
 | `MHOOK_INJECT_E_NO_EXEC`  | `0xA0000003` | `_internal_Execute` was not found in the companion DLL |
 | `MHOOK_INJECT_E_TIMEOUT`  | `0xA0000004` | the remote injection thread did not finish within the timeout |
 | `MHOOK_INJECT_E_ACCESS`   | `0xA0000005` | `TargetProcess` was not granted `PROCESS_ALL_ACCESS` (see [`TargetProcess`](#mhook_inject_params) below) |
+| `MHOOK_INJECT_E_NO_PROXY` | `0xA0000006` | 32-bit → 64-bit only: no x64 proxy executable was found (see [`ProxyPath`](#mhook_inject_params) and the cross-architecture section below) — the expected result when 32→64 injection is not deployed |
+| `MHOOK_INJECT_E_PROXY`    | `0xA0000007` | 32-bit → 64-bit only: the x64 proxy was found but failed to launch or exited before reporting completion |
 
 Other failures are propagated as-is — e.g. an underlying `NTSTATUS` mapped into an
 `HRESULT` — so test the result with `FAILED(hr)` and only compare against the codes
@@ -167,6 +169,13 @@ typedef struct _MHOOK_INJECT_PARAMS {
     PIO_APC_ROUTINE  ApcRoutine;    // user APC queued to the CALLING thread
     PVOID            ApcContext;    // context passed verbatim to ApcRoutine
     PIO_STATUS_BLOCK IoStatusBlock; // receives the final NTSTATUS (Status field)
+
+    // 32-bit → 64-bit only: path to the x64 proxy executable (ignored otherwise).
+    //   NULL → probe "mhook_inject_proxy.exe", then the dynamic bundle's
+    //          "mhook_inject_proxy\mhook_inject_proxy.exe", next to the module that
+    //          contains Mhook_Inject; otherwise resolved relative to it (an absolute
+    //          path passes through).  See the 32-bit → 64-bit section below.
+    PCWSTR           ProxyPath;
 } MHOOK_INJECT_PARAMS;
 ```
 
@@ -499,6 +508,11 @@ build/artifacts/
     mhook_inject_internal.lib  ← intermediate archive (static builds only)
     mhook_inject.dll       ← DLL (dynamic builds only)
     mhook_inject.pdb
+  mhook_inject_proxy/x64/<configuration>/        ← 32→64 proxy exe (x64 only)
+    mhook_inject_proxy.exe ← static configs: self-contained; dynamic configs: bundle
+    mhook_inject.dll, mhook.dll  ← copied beside the exe in DYNAMIC configs (the bundle)
+  mhook_inject_proxy_lib/x64/<configuration>/    ← 32→64 proxy lib (x64 static configs)
+    mhook_inject_proxy.lib ← link into your own x64 proxy exe (+ mhook_inject.lib + mhook.lib)
   mhook-unit-tests/<platform>/<configuration>/
     mhook-unit-tests.exe
   ntdll_extra_stub/<platform>/<configuration>/
@@ -638,6 +652,8 @@ src/
     mhook_inject.cpp        Mhook_Inject implementation (calling-process side)
     inject_entry.c          _internal_Execute (runs in target process)
     inject_bootstrap_thunk_x64/x86.asm  Bootstrap-thunk stubs
+    inject_proxy_params.h   32→64 proxy wire contract (MHOOK_PROXY_BLOCK)
+  mhook_inject_proxy/       Native x64 proxy for 32→64 injection (exe + static lib)
   mhook-unit-tests/         Google Test test runner
   mhook_test_uninitialized_inject/  Companion DLL for the pre-init hook test (manual)
   mhook_inject_test_companion/      Companion DLL for the Mhook_Inject test
