@@ -394,6 +394,22 @@
       <ExcludedFromBuild Condition="'$(Platform)'!='Win32'">true</ExcludedFromBuild>
     </MASM>
   </ItemGroup>
+
+  <!-- ===== Cross-arch x86 bootstrap thunk for the 64->32 path (x64 build only) =====
+       ml64 can't assemble x86, so a CustomBuild assembles inject_bootstrap_thunk_x86.asm
+       with the 32-bit ml.exe and re-emits its bytes as a native-MASM .const DB blob
+       (utils/Asm-To-MasmDataBlob.ps1); that generated .asm is then assembled by ml64 and
+       linked normally, exposing InjectBootstrapThunkX86Begin/End for mhook_inject.cpp.
+       Same generate-in-IntDir-then-consume pattern as the message-table below. -->
+  <ItemGroup Condition="'$(Platform)'=='x64'">
+    <CustomBuild Include="inject_bootstrap_thunk_x86.asm">
+      <Command>pwsh -NoProfile -ExecutionPolicy Bypass -File "$(MSBuildProjectDirectory)\..\..\utils\Asm-To-MasmDataBlob.ps1" -SourceAsm "%(FullPath)" -AssemblerPath "$(VC_ExecutablePath_x64_x86)\ml.exe" -DumpbinPath "$(VC_ExecutablePath_x64_x64)\dumpbin.exe" -OutputAsm "$(IntDir)inject_bootstrap_thunk_x86_data.asm" -BeginLabel InjectBootstrapThunkX86Begin -EndLabel InjectBootstrapThunkX86End -EndSymbol InjectBootstrapThunkEnd</Command>
+      <Outputs>$(IntDir)inject_bootstrap_thunk_x86_data.asm;%(Outputs)</Outputs>
+      <Message>gen x86 cross-arch thunk blob</Message>
+    </CustomBuild>
+    <MASM Include="$(IntDir)inject_bootstrap_thunk_x86_data.asm" />
+  </ItemGroup>
+
   <ItemGroup>
     <None Include="inject_entry.def" />
   </ItemGroup>

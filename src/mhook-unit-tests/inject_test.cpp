@@ -1212,21 +1212,3 @@ TEST(MhookInjectTest, CrossArch_32to64StillNotImplemented)
 }
 
 #endif // _M_X64
-
-// Drift guard: the checked-in x86 bootstrap-thunk blob (embedded into the x64 build
-// for cross-arch) must equal the actually-assembled x86 thunk.  Verifiable in the
-// x86 STATIC RELEASE build: the symbol is linked in (static) and reached directly
-// (Release has no incremental-link ILT thunk that would alias it to a jmp stub).
-#if defined(_M_IX86) && defined(MHOOK_STATIC) && !defined(_DEBUG)
-#include "../mhook-inject/inject_bootstrap_thunk_x86_blob.h"
-extern "C" char InjectBootstrapThunkEntry[];
-extern "C" char InjectBootstrapThunkEnd[];
-TEST(MhookInjectTest, CrossArchThunkBlobMatches)
-{
-    size_t linkedSize = (size_t)(InjectBootstrapThunkEnd - InjectBootstrapThunkEntry);
-    ASSERT_EQ(linkedSize, sizeof(kInjectBootstrapThunkX86))
-        << "x86 thunk size changed — regenerate inject_bootstrap_thunk_x86_blob.h";
-    EXPECT_EQ(memcmp(InjectBootstrapThunkEntry, kInjectBootstrapThunkX86, linkedSize), 0)
-        << "x86 thunk bytes changed — regenerate inject_bootstrap_thunk_x86_blob.h";
-}
-#endif

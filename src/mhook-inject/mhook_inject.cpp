@@ -10,7 +10,6 @@
 
 #include "../nt_defs.h"
 #include "inject_params.h"
-#include "inject_bootstrap_thunk_x86_blob.h"  // kInjectBootstrapThunkX86 (cross-arch payload)
 
 // The library never includes <windows.h>; define the timeout sentinel locally.
 #ifndef INFINITE
@@ -34,6 +33,14 @@ extern "C" unsigned __int64 __emulu(unsigned int, unsigned int);
 // would get its thunk address, making (End - Entry) produce the wrong size.
 extern "C" char InjectBootstrapThunkEntry[];
 extern "C" char InjectBootstrapThunkEnd[];
+
+#ifdef _M_X64
+// Cross-arch (64->32) payload: the x86 thunk's bytes, assembled by the 32-bit ml.exe
+// and re-emitted as a native-MASM DB blob (utils/Asm-To-MasmDataBlob.ps1 ->
+// inject_bootstrap_thunk_x86_data.asm), linked here as data.  Size = End - Begin.
+extern "C" char InjectBootstrapThunkX86Begin[];
+extern "C" char InjectBootstrapThunkX86End[];
+#endif
 
 // ---------------------------------------------------------------------------
 // HRESULT helpers
@@ -867,11 +874,14 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     // same-arch uses the linked native thunk + native params.
     const void *thunkSrc;
     SIZE_T codeSize, paramsSize;
+#ifdef _M_X64
     if (crossTo32) {
-        thunkSrc   = kInjectBootstrapThunkX86;
-        codeSize   = sizeof(kInjectBootstrapThunkX86);
+        thunkSrc   = InjectBootstrapThunkX86Begin;
+        codeSize   = (SIZE_T)(InjectBootstrapThunkX86End - InjectBootstrapThunkX86Begin);
         paramsSize = sizeof(MHOOK_INJECT_REMOTE_PARAMS_X86);
-    } else {
+    } else
+#endif
+    {
         thunkSrc   = InjectBootstrapThunkEntry;
         codeSize   = (SIZE_T)((BYTE*)InjectBootstrapThunkEnd - (BYTE*)InjectBootstrapThunkEntry);
         paramsSize = sizeof(MHOOK_INJECT_REMOTE_PARAMS);
