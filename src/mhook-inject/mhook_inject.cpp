@@ -17,6 +17,12 @@
 #define INFINITE 0xFFFFFFFFu
 #endif
 
+// Unsigned 32x32->64 multiply as a single `mul` (compiler intrinsic, inlined in
+// every config) — used for ms->100ns timeout math without pulling the CRT __allmul
+// helper that a generic 64x64 multiply emits on x86 (we are ntdll-only).
+extern "C" unsigned __int64 __emulu(unsigned int, unsigned int);
+#pragma intrinsic(__emulu)
+
 // ---------------------------------------------------------------------------
 // Bootstrap-thunk blobs — assembled by MASM, linked as object code
 // ---------------------------------------------------------------------------
@@ -560,6 +566,72 @@ static WCHAR *DeriveSysWow64Path(const WCHAR *nativePath)
 }
 
 // ---------------------------------------------------------------------------
+// Cross-arch (64->32) async completion watcher
+//
+// A 32-bit target can't write the 64-bit caller's IO_STATUS_BLOCK nor queue a
+// 64-bit APC, so for cross-arch async injections that request either, the target
+// only signals a completion event and stashes its NTSTATUS in a caller-owned slot
+// (see MHOOK_INJECT_REMOTE_PARAMS.StatusSlot).  This thread runs in the CALLING
+// process: it waits for completion, reads the status, and performs the IoStatusBlock
+// write / Event signal / APC queue itself — all trivial in-process for a 64-bit
+// caller.  It owns (and frees) the slot, the completion event, and the duplicated
+// handles below.
+// ---------------------------------------------------------------------------
+
+typedef struct _MHOOK_INJECT_WATCHER {
+    HANDLE  TargetProcess;     // dup (PROCESS_VM_READ | PROCESS_VM_OPERATION)
+    PVOID   StatusSlot;        // target VA of the caller-owned NTSTATUS slot
+    HANDLE  CompletionEvent;   // calling-side event the target signals
+    PVOID   IoStatusBlock;     // caller VA (NULL if unused)
+    HANDLE  CallerThread;      // dup (THREAD_SET_CONTEXT); for the APC (NULL if unused)
+    PVOID   ApcRoutine;        // caller VA (NULL if unused)
+    PVOID   ApcContext;
+    HANDLE  UserEvent;         // caller's Event (NULL if unused)
+    ULONG   TimeoutMs;
+} MHOOK_INJECT_WATCHER;
+
+static VOID NTAPI InjectWatcherProc(PVOID arg)
+{
+    MHOOK_INJECT_WATCHER *w = (MHOOK_INJECT_WATCHER *)arg;
+
+    // Wait for completion, bounded by TimeoutMs (0 => 30 s, INFINITE => no timeout).
+    NTSTATUS waitSt;
+    if (w->TimeoutMs == INFINITE) {
+        waitSt = NtWaitForSingleObject(w->CompletionEvent, FALSE, NULL);
+    } else {
+        ULONG ms = w->TimeoutMs ? w->TimeoutMs : 30000u;
+        LARGE_INTEGER rel; rel.QuadPart = -(LONGLONG)__emulu(ms, 10000u);  // ms -> 100ns, relative
+        waitSt = NtWaitForSingleObject(w->CompletionEvent, FALSE, &rel);
+    }
+
+    NTSTATUS status = (NTSTATUS)0xC00000B5L;  // STATUS_IO_TIMEOUT (also the death/timeout case)
+    if (waitSt != STATUS_TIMEOUT)
+        NtReadVirtualMemory(w->TargetProcess, w->StatusSlot, &status, sizeof(status), NULL);
+
+    // Deliver caller-side, in NT order: IoStatusBlock, then Event, then APC.
+    if (w->IoStatusBlock) {
+        IO_STATUS_BLOCK *iosb = (IO_STATUS_BLOCK *)w->IoStatusBlock;
+        iosb->Status      = status;
+        iosb->Information = 0;
+    }
+    if (w->UserEvent)
+        NtSetEvent(w->UserEvent, NULL);
+    if (w->ApcRoutine && w->CallerThread)
+        NtQueueApcThread(w->CallerThread, (PPS_APC_ROUTINE)w->ApcRoutine,
+                         w->ApcContext, w->IoStatusBlock, NULL);
+
+    // Cleanup — the watcher owns all of these.
+    if (w->StatusSlot) {
+        PVOID base = w->StatusSlot; SIZE_T zero = 0;
+        NtFreeVirtualMemory(w->TargetProcess, &base, &zero, MEM_RELEASE);
+    }
+    if (w->TargetProcess)   NtClose(w->TargetProcess);
+    if (w->CallerThread)    NtClose(w->CallerThread);
+    if (w->CompletionEvent) NtClose(w->CompletionEvent);
+    RtlFreeHeap(RtlProcessHeap(), 0, w);
+}
+
+// ---------------------------------------------------------------------------
 // Mhook_Inject
 // ---------------------------------------------------------------------------
 
@@ -599,14 +671,11 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
 #endif
 
     if (crossTo32) {
-        // Cross-arch constraints (see mhook_inject.h):
-        //  - the injection module must be named as an x86 file on disk, so the
-        //    FunctionPointer form (a VA in the x64 caller) is not allowed;
-        //  - IoStatusBlock/APC completion require the target to write back into the
-        //    64-bit caller, impossible from a 32-bit target (Event/sync still work).
+        // Cross-arch constraint: the injection module must be named as an x86 file
+        // on disk, so the FunctionPointer form (a VA in the x64 caller) is not
+        // allowed.  IoStatusBlock/APC completion IS supported (delivered by a
+        // caller-side watcher thread — see InjectWatcherProc / needWatcher below).
         if (useFnPtr)
-            return MHOOK_INJECT_E_PARAMS;
-        if (params->IoStatusBlock || params->ApcRoutine)
             return MHOOK_INJECT_E_PARAMS;
     }
 
@@ -617,12 +686,20 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     BOOLEAN needsSyncEvent = !isAsync
                              && (params->Flags & MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT) != 0;
 
+    // Cross-arch async with IoStatusBlock/APC: the 32-bit target can't write back
+    // into the 64-bit caller, so a caller-side watcher thread delivers them.
+    BOOLEAN needWatcher = crossTo32 && isAsync
+                          && (params->IoStatusBlock || params->ApcRoutine);
+
     HRESULT hr = E_FAIL;
     NTSTATUS st;
     PVOID   remoteBase      = NULL;
     BOOLEAN remoteBaseOwned = FALSE;  // TRUE once the remote thread owns the free
     HANDLE  hThread         = NULL;
-    HANDLE  hSyncEvent      = NULL;   // calling-side handle (sync+delay internal event)
+    HANDLE  hSyncEvent      = NULL;   // calling-side handle (sync+delay internal event,
+                                      // or cross-arch async watcher completion event)
+    PVOID   watcherSlot     = NULL;   // cross-arch async: caller-owned status slot (target VA)
+    BOOLEAN watcherSpawned  = FALSE;  // TRUE once the watcher owns hSyncEvent + watcherSlot
 
     // All path strings are heap-allocated; freed in cleanup.
     WCHAR *selfPath      = NULL;  // full path of module containing Mhook_Inject
@@ -929,6 +1006,33 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
                                    EVENT_ALL_ACCESS, 0, 0);
         if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; }
         rp.CompletionEvent = hRemoteEvent;
+    } else if (needWatcher) {
+        // Cross-arch async + IoStatusBlock/APC: the target only signals an internal
+        // completion event and writes its NTSTATUS into a caller-owned slot; the
+        // caller-side watcher thread (spawned after thread creation) reads the slot
+        // and performs the IoStatusBlock/Event/APC delivery.
+        HANDLE hRemoteEvent = NULL;
+        st = NtCreateEvent(&hSyncEvent, EVENT_ALL_ACCESS, NULL,
+                           SynchronizationEvent, FALSE);
+        if (NT_SUCCESS(st))
+            st = NtDuplicateObject(NtCurrentProcess(), hSyncEvent,
+                                   params->TargetProcess, &hRemoteEvent,
+                                   EVENT_ALL_ACCESS, 0, 0);
+        if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; }
+        rp.CompletionEvent = hRemoteEvent;
+
+        SIZE_T slotSize = sizeof(NTSTATUS);
+        st = NtAllocateVirtualMemory(params->TargetProcess, &watcherSlot, 0,
+                                     &slotSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        if (!NT_SUCCESS(st)) { watcherSlot = NULL; hr = HrFromNt(st); goto cleanup; }
+        rp.StatusSlot = watcherSlot;
+
+        if (params->IoStatusBlock) {
+            params->IoStatusBlock->Status      = (NTSTATUS)0x00000103L; // STATUS_PENDING
+            params->IoStatusBlock->Information  = 0;
+        }
+        // rp.CallerProcess/CallerThread/ApcRoutine/IoStatusBlock stay 0: the 32-bit
+        // target can't use them; the watcher does the caller-side delivery.
     } else if (isAsync) {
         if (params->Event) {
             HANDLE hRemoteEvent = NULL;
@@ -995,7 +1099,9 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
         rp86.UserData                     = toU32(rp.UserData);
         rp86.UserDataSize                 = (ULONG)rp.UserDataSize;
         rp86.CompletionEvent              = toU32(rp.CompletionEvent);
-        // CallerProcess/Thread/Apc/IoStatusBlock stay 0 (rejected for cross-arch).
+        rp86.StatusSlot                   = toU32(rp.StatusSlot);
+        // CallerProcess/Thread/Apc/IoStatusBlock stay 0: delivered caller-side by the
+        // watcher thread (see needWatcher), so the 32-bit target never touches them.
         paramsSrc = &rp86;
     }
 
@@ -1031,9 +1137,55 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     // free remoteBase (doing so would race the running bootstrap thunk).
     remoteBaseOwned = TRUE;
 
+    if (needWatcher) {
+        // Hand the completion event + caller-owned status slot to a watcher thread
+        // in THIS process; it delivers IoStatusBlock/Event/APC once the target
+        // signals.  After it starts, the watcher owns hSyncEvent + watcherSlot.
+        MHOOK_INJECT_WATCHER *w = (MHOOK_INJECT_WATCHER *)RtlAllocateHeap(
+            RtlProcessHeap(), HEAP_ZERO_MEMORY, sizeof(MHOOK_INJECT_WATCHER));
+        HANDLE wTarget = NULL, wThread = NULL, hWatcher = NULL;
+        st = w ? STATUS_SUCCESS : STATUS_NO_MEMORY;
+        if (NT_SUCCESS(st))
+            st = NtDuplicateObject(NtCurrentProcess(), params->TargetProcess,
+                                   NtCurrentProcess(), &wTarget,
+                                   PROCESS_VM_READ | PROCESS_VM_OPERATION, 0, 0);
+        if (NT_SUCCESS(st) && params->ApcRoutine)
+            st = NtDuplicateObject(NtCurrentProcess(), NtCurrentThread(),
+                                   NtCurrentProcess(), &wThread,
+                                   THREAD_SET_CONTEXT, 0, 0);
+        if (NT_SUCCESS(st)) {
+            w->TargetProcess   = wTarget;
+            w->StatusSlot      = watcherSlot;
+            w->CompletionEvent = hSyncEvent;
+            w->IoStatusBlock   = params->IoStatusBlock;
+            w->CallerThread    = wThread;
+            w->ApcRoutine      = (PVOID)params->ApcRoutine;
+            w->ApcContext      = params->ApcContext;
+            w->UserEvent       = params->Event;
+            w->TimeoutMs       = params->TimeoutMs;
+            st = NtCreateThreadEx(&hWatcher, THREAD_ALL_ACCESS, NULL,
+                                  NtCurrentProcess(), (PVOID)InjectWatcherProc, w,
+                                  0, 0, 0, 0, NULL);
+        }
+        if (!NT_SUCCESS(st)) {
+            // Couldn't start the watcher.  The remote thread still runs and frees
+            // its own allocation; we just drop the (now-orphaned) completion event
+            // + slot via cleanup (watcherSpawned stays FALSE).
+            if (wTarget) NtClose(wTarget);
+            if (wThread) NtClose(wThread);
+            if (w) RtlFreeHeap(RtlProcessHeap(), 0, w);
+            hr = HrFromNt(st);
+            goto cleanup;
+        }
+        NtClose(hWatcher);        // detached
+        watcherSpawned = TRUE;    // watcher now owns hSyncEvent + watcherSlot
+        hSyncEvent     = NULL;    // so cleanup doesn't close it
+    }
+
     if (isAsync) {
         // Return immediately; completion is delivered to the target-bound Event
-        // and/or IoStatusBlock when the injection function returns.
+        // and/or IoStatusBlock when the injection function returns (or, cross-arch,
+        // by the watcher thread spawned above).
         hr = S_OK;
         goto cleanup;
     }
@@ -1097,6 +1249,12 @@ cleanup:
     if (!remoteBaseOwned && remoteBase) {
         SIZE_T zero = 0;
         NtFreeVirtualMemory(params->TargetProcess, &remoteBase, &zero, MEM_RELEASE);
+    }
+    // Cross-arch watcher status slot: the watcher frees it once spawned; otherwise
+    // (allocated but watcher never started) free it here.
+    if (!watcherSpawned && watcherSlot) {
+        SIZE_T zero = 0;
+        NtFreeVirtualMemory(params->TargetProcess, &watcherSlot, &zero, MEM_RELEASE);
     }
     HeapFreePath(selfPath);
     HeapFreePath(selfDir);

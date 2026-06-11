@@ -62,7 +62,8 @@ typedef NTSTATUS (NTAPI *LdrLoadDllFn)(
 //     ApcRoutine              @204  (8)           @ 92  (4)
 //     ApcContext              @212  (8)           @ 96  (4)
 //     IoStatusBlock           @220  (8)           @100  (4)
-//     sizeof                  =228                =104
+//     StatusSlot              @228  (8)           @104  (4)
+//     sizeof                  =236                =108
 // ---------------------------------------------------------------------------
 
 #pragma pack(push, 1)
@@ -117,6 +118,10 @@ typedef struct _MHOOK_INJECT_REMOTE_PARAMS {
     PVOID           ApcRoutine;           // @204 / @92
     PVOID           ApcContext;           // @212 / @96
     PVOID           IoStatusBlock;        // @220 / @100
+    // Cross-arch (64->32) async only: target VA of a small caller-owned slot into
+    // which the target writes its final NTSTATUS, for the caller-side watcher to
+    // read (the 32-bit target can't write the 64-bit caller's IoStatusBlock).
+    PVOID           StatusSlot;           // @228 / @104
 } MHOOK_INJECT_REMOTE_PARAMS;
 #pragma pack(pop)
 
@@ -155,7 +160,8 @@ INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CallerThread)         
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ApcRoutine)                 == 204, "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ApcContext)                 == 212, "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, IoStatusBlock)              == 220, "layout");
-INJECT_STATIC_ASSERT(sizeof(MHOOK_INJECT_REMOTE_PARAMS)                          == 228, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, StatusSlot)                 == 228, "layout");
+INJECT_STATIC_ASSERT(sizeof(MHOOK_INJECT_REMOTE_PARAMS)                          == 236, "layout");
 INJECT_STATIC_ASSERT(sizeof(UNWIND_CODE)                                         ==   2, "unwind layout");
 INJECT_STATIC_ASSERT(sizeof(UNWIND_INFO)                                         ==   6, "unwind layout");
 INJECT_STATIC_ASSERT(sizeof(RUNTIME_FUNCTION)                                    ==  12, "unwind layout");
@@ -180,7 +186,8 @@ INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, CallerThread)       ==
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ApcRoutine)         == 92,  "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ApcContext)         == 96,  "layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, IoStatusBlock)      == 100, "layout");
-INJECT_STATIC_ASSERT(sizeof(MHOOK_INJECT_REMOTE_PARAMS)                       == 104, "layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, StatusSlot)         == 104, "layout");
+INJECT_STATIC_ASSERT(sizeof(MHOOK_INJECT_REMOTE_PARAMS)                       == 108, "layout");
 #endif
 
 // ---------------------------------------------------------------------------
@@ -227,7 +234,8 @@ typedef struct _MHOOK_INJECT_REMOTE_PARAMS_X86 {
     ULONG       ApcRoutine;            // @ 92
     ULONG       ApcContext;            // @ 96
     ULONG       IoStatusBlock;         // @100
-} MHOOK_INJECT_REMOTE_PARAMS_X86;      // 104 bytes
+    ULONG       StatusSlot;            // @104  cross-arch async caller-owned status slot
+} MHOOK_INJECT_REMOTE_PARAMS_X86;      // 108 bytes
 #pragma pack(pop)
 
 INJECT_STATIC_ASSERT(sizeof(MHOOK_STR32)                                          ==   8, "x86 string");
@@ -251,4 +259,5 @@ INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, CallerThread)     
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, ApcRoutine)         ==  92, "x86 layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, ApcContext)         ==  96, "x86 layout");
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, IoStatusBlock)      == 100, "x86 layout");
-INJECT_STATIC_ASSERT(sizeof(MHOOK_INJECT_REMOTE_PARAMS_X86)                        == 104, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, StatusSlot)         == 104, "x86 layout");
+INJECT_STATIC_ASSERT(sizeof(MHOOK_INJECT_REMOTE_PARAMS_X86)                        == 108, "x86 layout");

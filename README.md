@@ -256,10 +256,12 @@ target must be 32-bit:
 - For **dynamic** builds, set `MhookDllPath` to the **x86** `mhook.dll`; the x86
   `mhook_inject.dll` companion must sit in the same directory.
 - The companion's PE machine must match the target, else `MHOOK_INJECT_E_PARAMS`.
-- Completion: synchronous (incl. `DELAY_UNTIL_INIT`) and **async via `Event`** work.
-  `IoStatusBlock` and `ApcRoutine` completion are **not** supported cross-arch (a
-  32-bit target cannot write back into the 64-bit caller) and return
-  `MHOOK_INJECT_E_PARAMS`.
+- All completion modes work cross-arch: synchronous (incl. `DELAY_UNTIL_INIT`),
+  `Event`, `IoStatusBlock`, and `ApcRoutine`. Since a 32-bit target can't write back
+  into the 64-bit caller, async `IoStatusBlock`/`ApcRoutine` are delivered by an
+  internal caller-side helper thread once the target signals completion — so they're
+  bounded by `TimeoutMs` (a target that dies before completing surfaces as a timeout
+  `NTSTATUS`) and arrive a moment after completion rather than from the target itself.
 
 The reverse direction (32-bit → 64-bit) is **not implemented** and returns `E_NOTIMPL`
 — there is no clean, ntdll-only way to create a 64-bit thread from a WOW64 process.

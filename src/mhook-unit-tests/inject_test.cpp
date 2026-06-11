@@ -1016,6 +1016,115 @@ TEST(MhookInjectTest, CrossArch_DelayInto32BitTarget)
         << "marker not found. Output: [" << output << "]";
 }
 
+// Cross-arch async + IoStatusBlock: a caller-side watcher thread (the 32-bit target
+// can't write the 64-bit caller's IOSB) fills it with the injection NTSTATUS and
+// signals the Event.  By the time the Event fires, the IOSB is populated.
+TEST(MhookInjectTest, CrossArch_AsyncIoStatusBlockInto32BitTarget)
+{
+    std::wstring x86dir = SiblingX86Dir();
+    if (x86dir.empty()) GTEST_SKIP() << "test exe is not under .../x64/<config>/";
+    std::wstring companion = x86dir + L"mhook_inject_test_companion.dll";
+    std::wstring mhookdll  = x86dir + L"mhook.dll";
+    if (!FileExists(companion)) GTEST_SKIP() << "x86 companion not built";
+
+    std::wstring cmd32;
+    if (!Get32BitCmdPath(cmd32)) GTEST_SKIP() << "no SysWOW64\\cmd.exe";
+
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedExe(cmd32.c_str(), &pi, &hRead, &hWrite))
+        GTEST_SKIP() << "could not create 32-bit cmd.exe (" << GetLastError() << ")";
+
+    HANDLE hEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+    ASSERT_NE(hEvent, (HANDLE)NULL);
+    IO_STATUS_BLOCK iosb;
+    iosb.Status = (NTSTATUS)0x7fffffffL; iosb.Information = 0;
+
+    MHOOK_INJECT_PARAMS p = {};
+    p.Size          = sizeof(p);
+    p.TargetProcess = pi.hProcess;
+    p.DllPath       = companion.c_str();
+    p.FunctionName  = "Inject_WriteMarkerAndResume";
+    p.Flags         = MHOOK_INJECT_FLAG_ASYNC;
+    p.Event         = hEvent;
+    p.IoStatusBlock = &iosb;
+    CROSS_SET_MHOOK(p, mhookdll);
+
+    HRESULT hr = Mhook_Inject(&p);
+    DWORD waited = WaitForSingleObject(hEvent, 15000);
+    NTSTATUS finalStatus = iosb.Status;
+
+    ResumeThread(pi.hThread);
+    CloseHandle(hWrite);
+    std::string output = DrainPipe(hRead, 15000);
+    WaitForSingleObject(pi.hProcess, 5000);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead); CloseHandle(hEvent);
+
+    EXPECT_HRESULT_SUCCEEDED(hr) << "cross async inject failed: 0x" << std::hex << hr;
+    EXPECT_EQ(waited, (DWORD)WAIT_OBJECT_0) << "completion event was not signalled";
+    EXPECT_EQ(finalStatus, (NTSTATUS)0)
+        << "IoStatusBlock.Status not updated to STATUS_SUCCESS; got 0x" << std::hex << finalStatus;
+    EXPECT_TRUE(output.find("MHOOK_INJECT_OK") != std::string::npos)
+        << "marker not found. Output: [" << output << "]";
+}
+
+// Cross-arch async + ApcRoutine: the watcher re-queues the user APC to the original
+// calling thread (it runs in the next alertable wait, same as same-arch).
+TEST(MhookInjectTest, CrossArch_AsyncApcInto32BitTarget)
+{
+    std::wstring x86dir = SiblingX86Dir();
+    if (x86dir.empty()) GTEST_SKIP() << "test exe is not under .../x64/<config>/";
+    std::wstring companion = x86dir + L"mhook_inject_test_companion.dll";
+    std::wstring mhookdll  = x86dir + L"mhook.dll";
+    if (!FileExists(companion)) GTEST_SKIP() << "x86 companion not built";
+
+    std::wstring cmd32;
+    if (!Get32BitCmdPath(cmd32)) GTEST_SKIP() << "no SysWOW64\\cmd.exe";
+
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedExe(cmd32.c_str(), &pi, &hRead, &hWrite))
+        GTEST_SKIP() << "could not create 32-bit cmd.exe (" << GetLastError() << ")";
+
+    IO_STATUS_BLOCK iosb;
+    iosb.Status = (NTSTATUS)0x7fffffffL; iosb.Information = 0;
+    g_apcRan = 0; g_apcCtx = nullptr; g_apcIosb = nullptr;
+    g_apcStatus = (NTSTATUS)0x7fffffffL;
+    void *kCtx = (void *)(ULONG_PTR)0x00C0FFEEu;
+
+    MHOOK_INJECT_PARAMS p = {};
+    p.Size          = sizeof(p);
+    p.TargetProcess = pi.hProcess;
+    p.DllPath       = companion.c_str();
+    p.FunctionName  = "Inject_WriteMarkerAndResume";
+    p.Flags         = MHOOK_INJECT_FLAG_ASYNC;
+    p.ApcRoutine    = TestApcRoutine;
+    p.ApcContext    = kCtx;
+    p.IoStatusBlock = &iosb;
+    CROSS_SET_MHOOK(p, mhookdll);
+
+    HRESULT hr = Mhook_Inject(&p);
+
+    // The watcher queues the APC to THIS (calling) thread; deliver via alertable waits.
+    for (int i = 0; i < 200 && !g_apcRan; ++i)
+        SleepEx(50, TRUE);
+
+    bool             ran       = (g_apcRan != 0);
+    PVOID            ctx       = g_apcCtx;
+    PIO_STATUS_BLOCK iosbArg   = g_apcIosb;
+    NTSTATUS         apcStatus = g_apcStatus;
+
+    CloseHandle(hWrite);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead);
+
+    EXPECT_HRESULT_SUCCEEDED(hr) << "cross async inject failed: 0x" << std::hex << hr;
+    EXPECT_TRUE(ran) << "APC did not run on the calling thread";
+    EXPECT_EQ(ctx, kCtx) << "APC received wrong ApcContext";
+    EXPECT_EQ(iosbArg, &iosb) << "APC received wrong IoStatusBlock pointer";
+    EXPECT_EQ(apcStatus, (NTSTATUS)0)
+        << "APC saw non-success IoStatusBlock.Status: 0x" << std::hex << apcStatus;
+}
+
 // Cross-arch rejects the modes that can't work across the bitness boundary, and a
 // wrong-architecture companion, each with MHOOK_INJECT_E_PARAMS.
 TEST(MhookInjectTest, CrossArch_RejectsUnsupportedModes)
@@ -1049,33 +1158,8 @@ TEST(MhookInjectTest, CrossArch_RejectsUnsupportedModes)
         cleanup(&pi, r, w);
         EXPECT_EQ(hr, MHOOK_INJECT_E_PARAMS) << "FunctionPointer form should be rejected cross-arch";
     }
-    // (b) async IoStatusBlock cannot be written back into the 64-bit caller.
-    {
-        PROCESS_INFORMATION pi = {}; HANDLE r = NULL, w = NULL;
-        if (!freshTarget(&pi, &r, &w)) GTEST_SKIP() << "no 32-bit cmd";
-        IO_STATUS_BLOCK iosb = {};
-        MHOOK_INJECT_PARAMS p = {};
-        p.Size = sizeof(p); p.TargetProcess = pi.hProcess;
-        p.DllPath = companion.c_str(); p.FunctionName = "Inject_WriteMarkerAndResume";
-        p.Flags = MHOOK_INJECT_FLAG_ASYNC; p.IoStatusBlock = &iosb;
-        CROSS_SET_MHOOK(p, mhookdll);
-        HRESULT hr = Mhook_Inject(&p);
-        cleanup(&pi, r, w);
-        EXPECT_EQ(hr, MHOOK_INJECT_E_PARAMS) << "IoStatusBlock should be rejected cross-arch";
-    }
-    // (c) async APC routine cannot run in the 64-bit caller from a 32-bit target.
-    {
-        PROCESS_INFORMATION pi = {}; HANDLE r = NULL, w = NULL;
-        if (!freshTarget(&pi, &r, &w)) GTEST_SKIP() << "no 32-bit cmd";
-        MHOOK_INJECT_PARAMS p = {};
-        p.Size = sizeof(p); p.TargetProcess = pi.hProcess;
-        p.DllPath = companion.c_str(); p.FunctionName = "Inject_WriteMarkerAndResume";
-        p.Flags = MHOOK_INJECT_FLAG_ASYNC; p.ApcRoutine = TestApcRoutine;
-        CROSS_SET_MHOOK(p, mhookdll);
-        HRESULT hr = Mhook_Inject(&p);
-        cleanup(&pi, r, w);
-        EXPECT_EQ(hr, MHOOK_INJECT_E_PARAMS) << "ApcRoutine should be rejected cross-arch";
-    }
+    // (IoStatusBlock and ApcRoutine ARE supported cross-arch now — see the
+    // CrossArch_Async* tests below — so they are no longer rejected here.)
 #ifdef MHOOK_STATIC
     // (d) a wrong-architecture (x64) companion against a 32-bit target is rejected.
     // Static only: here DllPath IS the companion whose machine is validated.  In

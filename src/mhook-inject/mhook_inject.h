@@ -220,12 +220,15 @@ typedef void (__cdecl *MhookInjectedFn)(MHOOK_INJECT_CONTEXT *ctx);
 // Cross-architecture: a 64-bit caller may inject into a 32-bit (WOW64) target.
 // In that case everything loaded into the target must be 32-bit — use the
 // DllPath + FunctionName form naming the x86 companion (the FunctionPointer form
-// is rejected), and for dynamic builds set MhookDllPath to the x86 mhook.dll (the
-// x86 mhook_inject.dll companion must sit next to it).  Synchronous and async-via-
-// Event completion work cross-arch; IoStatusBlock and ApcRoutine completion do not
-// (the 32-bit target cannot write back into the 64-bit caller) and are rejected
-// with MHOOK_INJECT_E_PARAMS.  The reverse (32-bit caller -> 64-bit target) is not
-// implemented and returns E_NOTIMPL.
+// is rejected with MHOOK_INJECT_E_PARAMS), and for dynamic builds set MhookDllPath
+// to the x86 mhook.dll (the x86 mhook_inject.dll companion must sit next to it).
+// All completion modes work cross-arch: synchronous, Event, IoStatusBlock and
+// ApcRoutine.  Because a 32-bit target cannot write back into the 64-bit caller,
+// async IoStatusBlock/ApcRoutine completion is delivered by an internal caller-side
+// helper thread once the target signals completion — so it is bounded by TimeoutMs
+// (a target that dies before completing surfaces as a timeout NTSTATUS), and the
+// delivery happens a moment after completion rather than from the target directly.
+// The reverse (32-bit caller -> 64-bit target) is not implemented (E_NOTIMPL).
 // ---------------------------------------------------------------------------
 
 HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params);

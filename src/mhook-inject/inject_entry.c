@@ -91,6 +91,7 @@ static HANDLE             g_DelayedCallerThread;    // async APC (subtask 2)
 static PVOID              g_DelayedApcRoutine;      // async APC (subtask 2)
 static PVOID              g_DelayedApcContext;      // async APC (subtask 2)
 static PVOID              g_DelayedIoStatusBlock;   // caller-side IO_STATUS_BLOCK VA
+static PVOID              g_DelayedStatusSlot;      // cross-arch caller-owned status slot (target VA)
 
 // ---------------------------------------------------------------------------
 // NotifyCompletion — report that the injection function has returned.
@@ -104,7 +105,8 @@ static PVOID              g_DelayedIoStatusBlock;   // caller-side IO_STATUS_BLO
 
 static void NotifyCompletion(NTSTATUS status, HANDLE completionEvent,
                              HANDLE callerProcess, PVOID ioStatusBlock,
-                             HANDLE callerThread, PVOID apcRoutine, PVOID apcContext)
+                             HANDLE callerThread, PVOID apcRoutine, PVOID apcContext,
+                             PVOID statusSlot)
 {
     if (ioStatusBlock && callerProcess) {
         IO_STATUS_BLOCK iosb;
@@ -112,6 +114,11 @@ static void NotifyCompletion(NTSTATUS status, HANDLE completionEvent,
         iosb.Information = 0;
         NtWriteVirtualMemory(callerProcess, ioStatusBlock, &iosb, sizeof(iosb), NULL);
     }
+    // Cross-arch (64->32): stash the status in the caller-owned slot (our own
+    // memory) for the caller-side watcher to read.  Written BEFORE the event is
+    // signalled so the watcher observes a valid status on wakeup.
+    if (statusSlot)
+        *(volatile NTSTATUS *)statusSlot = status;
     if (completionEvent)
         NtSetEvent(completionEvent, NULL);
     if (apcRoutine && callerThread)
@@ -197,11 +204,13 @@ static void CallDelayedTargetFunction(void)
     /* Report completion to the caller (sync-wait event or async notification). */
     NotifyCompletion(STATUS_SUCCESS, g_DelayedCompletionEvent,
                      g_DelayedCallerProcess, g_DelayedIoStatusBlock,
-                     g_DelayedCallerThread, g_DelayedApcRoutine, g_DelayedApcContext);
+                     g_DelayedCallerThread, g_DelayedApcRoutine, g_DelayedApcContext,
+                     g_DelayedStatusSlot);
     g_DelayedCompletionEvent = NULL;
     g_DelayedCallerProcess   = NULL;
     g_DelayedIoStatusBlock   = NULL;
     g_DelayedCallerThread    = NULL;
+    g_DelayedStatusSlot      = NULL;
 
     /* Free heap copies */
     if (g_DelayedCtx.UserData) {
@@ -288,7 +297,8 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
     if (!needDelay && !pTargetFunc) {
         NotifyCompletion(pParams->InjectStatus, pParams->CompletionEvent,
                          pParams->CallerProcess, pParams->IoStatusBlock,
-                         pParams->CallerThread, pParams->ApcRoutine, pParams->ApcContext);
+                         pParams->CallerThread, pParams->ApcRoutine, pParams->ApcContext,
+                         pParams->StatusSlot);
         FreeAllocationAndExitThread(pParams, pParams->InjectStatus);
     }
 
@@ -333,6 +343,7 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
         g_DelayedCompletionEvent = pParams->CompletionEvent;
         g_DelayedCallerProcess   = pParams->CallerProcess;
         g_DelayedIoStatusBlock   = pParams->IoStatusBlock;
+        g_DelayedStatusSlot      = pParams->StatusSlot;
         g_DelayedCallerThread    = pParams->CallerThread;   /* subtask 2 (inert) */
         g_DelayedApcRoutine      = pParams->ApcRoutine;     /* subtask 2 (inert) */
         g_DelayedApcContext      = pParams->ApcContext;     /* subtask 2 (inert) */
@@ -392,7 +403,8 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
             NTSTATUS err = (NTSTATUS)(0xDE000000 | (ULONG)pParams->InjectStatus);
             NotifyCompletion(err, pParams->CompletionEvent,
                              pParams->CallerProcess, pParams->IoStatusBlock,
-                             pParams->CallerThread, pParams->ApcRoutine, pParams->ApcContext);
+                             pParams->CallerThread, pParams->ApcRoutine, pParams->ApcContext,
+                             pParams->StatusSlot);
             FreeAllocationAndExitThread(pParams, err);
         }
 
@@ -440,7 +452,8 @@ NTSTATUS __cdecl _internal_Execute(MHOOK_INJECT_REMOTE_PARAMS *pParams)
        via NtQueryInformationThread in synchronous mode). */
     NotifyCompletion(pParams->InjectStatus, pParams->CompletionEvent,
                      pParams->CallerProcess, pParams->IoStatusBlock,
-                     pParams->CallerThread, pParams->ApcRoutine, pParams->ApcContext);
+                     pParams->CallerThread, pParams->ApcRoutine, pParams->ApcContext,
+                     pParams->StatusSlot);
     FreeAllocationAndExitThread(pParams, pParams->InjectStatus);
 }
 
