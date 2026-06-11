@@ -6,6 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 mhook is a Windows function-hooking library (x86 + x64) that patches target functions in-place at runtime, using a disassembler to build a trampoline so the original function can still be called. The entire library depends only on `ntdll.dll` — no kernel32, Win32, or CRT — enabling use during early process initialisation before those subsystems exist.
 
+It ships in two halves: the **hook engine** (`Mhook_SetHook`/`Mhook_Unhook`, `src/mhook-lib/`) and a **remote-injection** component (`Mhook_Inject`, `src/mhook-inject/`) that loads a companion DLL into another process and runs a user function there — optionally deferred until the target finishes loader initialisation. Both are equally constrained to ntdll-only.
+
 ## Build
 
 **Prerequisites:** Visual Studio 2022 (v145 toolset), Windows SDK 10.0, PowerShell 7+. Google Test is a git submodule under `third_party/googletest`; on a fresh clone run `git submodule update --init` before building or the test project won't compile.
@@ -109,7 +111,7 @@ Several ntdll exports the library uses are absent from the Windows SDK's `ntdll.
 
 Replaces `<windows.h>` throughout the library. Includes only `<minwindef.h>` and `<winnt.h>` (no kernel32/user32 surface). All NT native type definitions (`NTSTATUS`, `UNICODE_STRING`, `NT_PEB`, `PEB_LDR_DATA_MIN`, etc.) and `ntdll` function declarations live here. It also defines the x64 unwind types `UNWIND_INFO` / `UNWIND_CODE` / the `UWOP_*` opcodes (guarded by `#ifdef _M_X64`), which `winnt.h` does **not** provide — but `RUNTIME_FUNCTION` **is** in `winnt.h`, so do not redefine it (a second definition would clash).
 
-**Hard rule:** never include `<windows.h>` in library code (`mhook.cpp`, `inject_entry.c`, `mhook_inject.cpp`, or any header they include). Test code (`tests.cpp`) is exempt.
+**Hard rule:** never include `<windows.h>` in library code (`mhook.cpp`, `inject_entry.c`, `mhook_inject.cpp`, or any header they include). Test code under `src/mhook-unit-tests/` (`tests.cpp`, `inject_test.cpp`, `uninit_test.cpp`) is exempt and uses `<windows.h>` freely.
 
 ### `disasm-lib` (`src/disasm-lib/`)
 
