@@ -410,8 +410,23 @@
       <Outputs>$(IntDir)inject_bootstrap_thunk_x86_data.asm;%(Outputs)</Outputs>
       <Message>gen x86 cross-arch thunk blob</Message>
     </CustomBuild>
-    <MASM Include="$(IntDir)inject_bootstrap_thunk_x86_data.asm" />
   </ItemGroup>
+
+  <!-- Feed the generated blob to ml64 at build time rather than as a static <MASM>
+       project item.  A static item shows up as a (phantom) source file in Solution
+       Explorer, and the MASM build-customization rule ignores <Visible>false</Visible>.
+       Adding it inside a target keeps it out of the IDE's static item set entirely
+       while still assembling + linking it: an item added to @(MASM) before _MASM
+       persists for the rest of the build, so _MASM assembles it and the later
+       ComputeMASMObj / ComputeMASMOutput targets feed its .obj to Obj/Lib/Link.
+       x64-only, matching the CustomBuild that emits the .asm above. -->
+  <Target Name="AddGeneratedX86ThunkToMasm"
+          Condition="'$(Platform)'=='x64'"
+          BeforeTargets="_MASM">
+    <ItemGroup>
+      <MASM Include="$(IntDir)inject_bootstrap_thunk_x86_data.asm" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <None Include="inject_entry.def" />
@@ -430,11 +445,26 @@
       <Outputs>$(IntDir)mhook_inject_messages.rc;$(IntDir)MSG00409.bin;%(Outputs)</Outputs>
       <Message>mc %(Filename)%(Extension)</Message>
     </CustomBuild>
-    <ResourceCompile Include="$(IntDir)mhook_inject_messages.rc">
-      <ExcludedFromBuild Condition="'$(ConfigurationType)'!='DynamicLibrary'">true</ExcludedFromBuild>
-      <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-    </ResourceCompile>
   </ItemGroup>
+
+  <!-- Compile the generated message-table .rc at build time rather than as a static
+       ResourceCompile project item — a static item shows as a phantom source file in
+       Solution Explorer, and ResourceCompile ignores <Visible>false</Visible> here too.
+       The .mc CustomBuild above (generate-sources phase) emits the .rc; this target runs
+       right after it and adds the .rc to @(ResourceCompile).  The ResourceCompile target's
+       '@(ResourceCompile)'!='' condition is evaluated at run time, so it then compiles the
+       .rc, and ComputeRCOutputs feeds the resulting .res into Link.  Dynamic configs only,
+       matching the CustomBuild's own ExcludedFromBuild gate.  (Same hide-from-IDE rationale
+       as AddGeneratedX86ThunkToMasm above.) -->
+  <Target Name="AddGeneratedMessageTableRc"
+          Condition="'$(ConfigurationType)'=='DynamicLibrary'"
+          AfterTargets="CustomBuild">
+    <ItemGroup>
+      <ResourceCompile Include="$(IntDir)mhook_inject_messages.rc">
+        <AdditionalIncludeDirectories>$(IntDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      </ResourceCompile>
+    </ItemGroup>
+  </Target>
 
   <!-- ===== Project references ===== -->
   <ItemGroup>
