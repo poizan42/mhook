@@ -46,8 +46,10 @@ Build artifacts land in `build/artifacts/`.
 # Run a test binary directly
 .\build\artifacts\mhook-unit-tests\x64\Release\mhook-unit-tests.exe --gtest_filter="*NtOpenProcess*"
 
-# Stress for flakiness
+# Stress for flakiness (-Parallel N runs the repeat/config work N-wide; raise
+# -TimeoutSeconds since the box is loaded)
 .\run-tests.ps1 -NoBuild -Repeat 10 -StopOnFailure
+.\run-tests.ps1 -NoBuild -Arch x86 -Filter "MhookInjectTest.*Delay*" -Repeat 40 -Parallel 8 -TimeoutSeconds 120
 
 # TTD traces (requires elevation)
 .\run-tests.ps1 -NoBuild -Trace -KeepResults

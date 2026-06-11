@@ -25,6 +25,17 @@
     after it passes (unless -KeepResults is set), so only failing iterations keep
     files on disk.
 
+.PARAMETER Parallel
+    Maximum number of test-exe runs to execute concurrently.  Defaults to 1
+    (fully sequential — identical to before).  Values > 1 dispatch the flat
+    (iteration x configuration) work list through a runspace pool, which speeds up
+    a stress pass (especially with -Repeat) and increases CPU/timing contention so
+    timing-sensitive races reproduce more readily.  Composes with -Trace and -Cdb
+    (each run records its own trace / debugs into its own results subfolder) — mind
+    the extra I/O for TTD and the N-debuggers load for CDB.  -StopOnFailure becomes
+    best-effort (in-flight runs finish; queued ones are skipped).  Under heavy
+    parallelism raise -TimeoutSeconds to avoid spurious timeouts.
+
 .PARAMETER ResultsDir
     Directory under which a timestamped subfolder is created for each invocation.
     Defaults to 'test-results' alongside this script.
@@ -97,6 +108,11 @@ param(
     [Parameter(ParameterSetName = 'Matrix')]
     [Parameter(ParameterSetName = 'Target')]
     [int]$Repeat = 1,
+
+    [Parameter(ParameterSetName = 'Matrix')]
+    [Parameter(ParameterSetName = 'Target')]
+    [ValidateRange(1, [int]::MaxValue)]
+    [int]$Parallel = 1,
 
     [Parameter(ParameterSetName = 'Matrix')]
     [Parameter(ParameterSetName = 'Target')]
@@ -262,6 +278,110 @@ function Invoke-TestExe([string]$Exe, [string]$Filter, [int]$TimeoutSeconds,
 }
 
 # ---------------------------------------------------------------------------
+# Run one (config, iteration): build status, run the exe, parse counts, write
+# the log.  Returns a result object — no Write-Host / exit, so it is safe to
+# call from a ForEach-Object -Parallel runspace.  A TTD/CDB infrastructure
+# failure is reported via the InfraError field (the caller decides how to react).
+# ---------------------------------------------------------------------------
+function Invoke-OneRun {
+    param(
+        [pscustomobject]$Cfg,
+        [int]$Iter,
+        [string]$IterDir,
+        [string]$TestExe,
+        [string]$Filter,
+        [int]$TimeoutSeconds,
+        [switch]$NoBuild,
+        [string]$TtdExe,
+        [string]$Cdb,
+        [string]$CdbX64Exe,
+        [string]$CdbX86Exe,
+        [string[]]$CdbArgs
+    )
+
+    $buildStatus = if ($NoBuild)                { 'SKIP' }
+                   elseif (Test-Path $TestExe)  { 'OK'   }
+                   else                         { 'FAILED' }
+
+    $testStatus = $null; $testDetail = $null; $failLines = @(); $infraError = $null
+
+    if ($buildStatus -in 'OK', 'SKIP') {
+        if (-not (Test-Path $TestExe)) {
+            $testStatus = 'NO EXE'
+        } else {
+            # Under TTD/CDB the GTest results go to a JSON file (TTD does not pipe the
+            # child's stdout; CDB mixes its own output in), keeping pass/fail counting clean.
+            $cdbForConfig = if ($Cdb) {
+                if ($Cfg.OutArch -eq 'x64') { $CdbX64Exe } else { $CdbX86Exe }
+            } else { '' }
+
+            $jsonPath = if ($TtdExe -or $cdbForConfig) {
+                Join-Path $IterDir "$($Cfg.OutArch)-$($Cfg.MSBuildConfig).json"
+            } else { '' }
+
+            $run = Invoke-TestExe -Exe $TestExe -Filter $Filter -TimeoutSeconds $TimeoutSeconds `
+                                  -TtdExe $TtdExe -TtdOutDir $IterDir -JsonResultsPath $jsonPath `
+                                  -CdbExe $cdbForConfig -CdbScript $Cdb -CdbExtraArgs $CdbArgs
+
+            # Runner-itself failure (TTD/CDB): non-zero exit and no JSON written.
+            if (($TtdExe -or $cdbForConfig) -and $run.ExitCode -ne 0 -and -not (Test-Path $jsonPath)) {
+                $errLine = $run.Lines | Where-Object { $_ -match '^Error:' } | Select-Object -First 1
+                $infraError = if ($TtdExe) {
+                    "TTD failed to record for $($Cfg.MSBuildConfig)|$($Cfg.OutArch) (exit $($run.ExitCode))$(if ($errLine) { ': ' + $errLine }). TTD requires an elevated session."
+                } else {
+                    "CDB failed for $($Cfg.MSBuildConfig)|$($Cfg.OutArch) (exit $($run.ExitCode))$(if ($errLine) { ': ' + $errLine })."
+                }
+            }
+
+            $ok = -not $run.TimedOut -and $run.ExitCode -eq 0
+
+            $counts = $null
+            if ($jsonPath -and (Test-Path $jsonPath)) {
+                try {
+                    $j       = Get-Content $jsonPath -Raw | ConvertFrom-Json
+                    $nFailed = [int]$j.failures + [int]$j.errors
+                    $counts  = @{ Passed = [int]$j.tests - $nFailed; Failed = $nFailed }
+                    foreach ($suite in $j.testsuites) {
+                        foreach ($tc in $suite.testcases) {
+                            if ($tc.result -eq 'FAILED') {
+                                $failLines += "[  FAILED  ] $($suite.name).$($tc.name)"
+                            }
+                        }
+                    }
+                    # JSON is authoritative (TTD's -passThroughExit is always 0; CDB's exit varies).
+                    $ok = -not $run.TimedOut -and $nFailed -eq 0
+                } catch {}
+            }
+            if (-not $counts) {
+                $counts    = Get-GtestCounts $run.Lines
+                $failLines = @($run.Lines | Where-Object { $_ -match '^\[  FAILED  \]' })
+            }
+            $total = $counts.Passed + $counts.Failed
+
+            $logFile = Join-Path $IterDir "$($Cfg.OutArch)-$($Cfg.MSBuildConfig).log"
+            $run.Lines | Set-Content -Path $logFile -Encoding UTF8
+
+            if ($run.TimedOut)  { $testStatus = 'TIMEOUT' }
+            elseif ($ok)        { $testStatus = 'PASS'; $testDetail = "$($counts.Passed)/$total" }
+            else                { $testStatus = 'FAIL'; $testDetail = "$($counts.Passed)/$total" }
+        }
+    } else {
+        $testStatus = '-'
+    }
+
+    return [pscustomobject]@{
+        Iter       = $Iter
+        Arch       = $Cfg.OutArch
+        Config     = $Cfg.MSBuildConfig
+        Build      = $buildStatus
+        TestStatus = $testStatus
+        TestDetail = $testDetail
+        FailLines  = $failLines
+        InfraError = $infraError
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Configurations
 # ---------------------------------------------------------------------------
 $configs = @(
@@ -352,161 +472,172 @@ Write-Host ''
 $padWidth        = $Repeat.ToString().Length
 $allIterResults  = @()
 $totalWork       = $Repeat * $configs.Count
-$cfgNum          = 0
-$stopEarly       = $false
 
-for ($iter = 1; $iter -le $Repeat; $iter++) {
-    # When Repeat > 1, each iteration gets its own zero-padded subfolder so that
-    # passing iterations can be cleaned up independently without disturbing others.
-    $iterDir = if ($Repeat -eq 1) {
-                   $runDir
-               } else {
-                   Join-Path $runDir $iter.ToString().PadLeft($padWidth, '0')
-               }
-    if ($Repeat -gt 1) {
-        $null = New-Item -ItemType Directory -Path $iterDir -Force
-        Write-Host "--- Iteration $iter/$Repeat ---"
-    }
-
-    $iterResults = @()
-
-    foreach ($cfg in $configs) {
-        $label   = "$($cfg.MSBuildConfig)|$($cfg.OutArch)"
-        $testExe = Join-Path $SolutionDir "build" "artifacts" "mhook-unit-tests" $cfg.OutDir "mhook-unit-tests.exe"
-
-        $cfgNum++
-        $pct    = [int]($cfgNum / $totalWork * 100)
-        $status = if ($Repeat -gt 1) { "Iteration $iter/$Repeat  —  $label" } else { $label }
-        Write-Progress -Activity 'run-tests.ps1' -Status $status -PercentComplete $pct
-
-        $buildStatus = if ($NoBuild)              { 'SKIP' }
-                       elseif (Test-Path $testExe) { 'OK'   }
-                       else                        { 'FAILED' }
-
-        $testStatus = $null
-        $testDetail = $null
-
-        if ($buildStatus -in 'OK', 'SKIP') {
-            if (-not (Test-Path $testExe)) {
-                $testStatus = 'NO EXE'
-            } else {
-                # When running under TTD or CDB, GTest results go to a JSON file.
-                # TTD does not pipe child stdout through its own; CDB does but mixes
-                # debugger output in, so JSON is used in both cases to keep pass/fail
-                # counting clean.  The file lives in $iterDir alongside the log.
-                $cdbForConfig = if ($Cdb) {
-                    if ($cfg.OutArch -eq 'x64') { $cdbX64Exe } else { $cdbX86Exe }
-                } else { '' }
-
-                $jsonPath = if ($ttdExe -or $cdbForConfig) {
-                    Join-Path $iterDir "$($cfg.OutArch)-$($cfg.MSBuildConfig).json"
-                } else { '' }
-
-                Write-Host "  Testing  $label ..." -NoNewline
-                $run = Invoke-TestExe -Exe $testExe -Filter $Filter -TimeoutSeconds $TimeoutSeconds `
-                                      -TtdExe $ttdExe -TtdOutDir $iterDir -JsonResultsPath $jsonPath `
-                                      -CdbExe $cdbForConfig -CdbScript $Cdb -CdbExtraArgs $CdbArgs
-
-                # Detect TTD/CDB infrastructure failure vs a test failure.  When the
-                # runner itself fails it exits non-zero and the JSON results file is
-                # never written.
-                if (($ttdExe -or $cdbForConfig) -and $run.ExitCode -ne 0 -and -not (Test-Path $jsonPath)) {
-                    $errLine = $run.Lines | Where-Object { $_ -match '^Error:' } | Select-Object -First 1
-                    Write-Host ''
-                    if ($ttdExe) {
-                        Write-Error "TTD failed to record (exit $($run.ExitCode))$(if ($errLine) { ': ' + $errLine })"
-                        Write-Error 'TTD requires administrative privileges. Re-run in an elevated session.'
-                    } else {
-                        Write-Error "CDB failed (exit $($run.ExitCode))$(if ($errLine) { ': ' + $errLine })"
-                    }
-                    exit 1
-                }
-
-                $ok = -not $run.TimedOut -and $run.ExitCode -eq 0
-
-                # Prefer JSON results (written by the test itself; available in TTD
-                # mode where stdout is not piped through TTD).  Fall back to parsing
-                # the captured stdout lines for non-TTD runs.
-                $counts   = $null
-                $failLines = @()
-                if ($jsonPath -and (Test-Path $jsonPath)) {
-                    try {
-                        $j       = Get-Content $jsonPath -Raw | ConvertFrom-Json
-                        $nFailed = [int]$j.failures + [int]$j.errors
-                        $counts  = @{ Passed = [int]$j.tests - $nFailed; Failed = $nFailed }
-                        foreach ($suite in $j.testsuites) {
-                            foreach ($tc in $suite.testcases) {
-                                if ($tc.result -eq 'FAILED') {
-                                    $failLines += "[  FAILED  ] $($suite.name).$($tc.name)"
-                                }
-                            }
-                        }
-                        # JSON is authoritative: override $ok so that TTD's broken
-                        # -passThroughExit (always 0) and CDB's variable exit code
-                        # do not mask test failures.
-                        $ok = -not $run.TimedOut -and $nFailed -eq 0
-                    } catch {}
-                }
-                if (-not $counts) {
-                    $counts    = Get-GtestCounts $run.Lines
-                    $failLines = @($run.Lines | Where-Object { $_ -match '^\[  FAILED  \]' })
-                }
-                $total = $counts.Passed + $counts.Failed
-
-                $logFile = Join-Path $iterDir "$($cfg.OutArch)-$($cfg.MSBuildConfig).log"
-                $run.Lines | Set-Content -Path $logFile -Encoding UTF8
-
-                if ($run.TimedOut) {
-                    $testStatus = 'TIMEOUT'
-                    Write-Host " TIMEOUT (>${TimeoutSeconds}s)" -ForegroundColor Yellow
-                } elseif ($ok) {
-                    $testStatus = 'PASS'
-                    $testDetail = "$($counts.Passed)/$total"
-                    Write-Host " PASS ($($counts.Passed)/$total)"
-                } else {
-                    $testStatus = 'FAIL'
-                    $testDetail = "$($counts.Passed)/$total"
-                    Write-Host " FAIL ($($counts.Passed)/$total)"
-                    $failLines | Select-Object -First 10 |
-                        ForEach-Object { Write-Host "    $_" }
-                }
-            }
-        } else {
-            $testStatus = '-'
-        }
-
-        $iterResults += [pscustomobject]@{
-            Iter       = $iter
-            Arch       = $cfg.OutArch
-            Config     = $cfg.MSBuildConfig
-            Build      = $buildStatus
-            TestStatus = $testStatus
-            TestDetail = $testDetail
-        }
-
-        if ($StopOnFailure -and $testStatus -in 'FAIL', 'TIMEOUT') {
-            Write-Host "  Stopping after first failure (-StopOnFailure)." -ForegroundColor Yellow
-            $stopEarly = $true
-            break
-        }
-    }
-
-    $allIterResults += $iterResults
-
-    # Clean up this iteration's subfolder immediately if everything passed.
-    # Failing iterations keep their artifacts so they can be inspected later.
-    $iterOk = -not ($iterResults | Where-Object { $_.TestStatus -ne 'PASS' })
-    if ($Repeat -gt 1 -and $iterOk -and -not $KeepResults) {
-        $ProgressPreference = 'SilentlyContinue'
-        Remove-Item -Recurse -Force $iterDir
-        $ProgressPreference = 'Continue'
-    }
-
-    if ($Repeat -gt 1) { Write-Host '' }
-    if ($stopEarly) { break }
+# Iteration subfolder: the run dir itself when Repeat == 1, else a zero-padded
+# per-iteration subfolder so passing iterations can be cleaned up independently.
+function Get-IterDir([int]$Iter) {
+    if ($Repeat -eq 1) { $runDir }
+    else { Join-Path $runDir $Iter.ToString().PadLeft($padWidth, '0') }
 }
 
-Write-Progress -Activity 'run-tests.ps1' -Completed
+if ($Parallel -le 1) {
+    # =======================================================================
+    # Sequential (default) — per-iteration headers + live "Testing ... PASS" lines.
+    # =======================================================================
+    $cfgNum    = 0
+    $stopEarly = $false
+
+    for ($iter = 1; $iter -le $Repeat; $iter++) {
+        $iterDir = Get-IterDir $iter
+        if ($Repeat -gt 1) {
+            $null = New-Item -ItemType Directory -Path $iterDir -Force
+            Write-Host "--- Iteration $iter/$Repeat ---"
+        }
+
+        $iterResults = @()
+
+        foreach ($cfg in $configs) {
+            $label   = "$($cfg.MSBuildConfig)|$($cfg.OutArch)"
+            $testExe = Join-Path $SolutionDir "build" "artifacts" "mhook-unit-tests" $cfg.OutDir "mhook-unit-tests.exe"
+
+            $cfgNum++
+            $pct    = [int]($cfgNum / $totalWork * 100)
+            $status = if ($Repeat -gt 1) { "Iteration $iter/$Repeat  —  $label" } else { $label }
+            Write-Progress -Activity 'run-tests.ps1' -Status $status -PercentComplete $pct
+
+            if (Test-Path $testExe) { Write-Host "  Testing  $label ..." -NoNewline }
+
+            $r = Invoke-OneRun -Cfg $cfg -Iter $iter -IterDir $iterDir -TestExe $testExe `
+                               -Filter $Filter -TimeoutSeconds $TimeoutSeconds -NoBuild:$NoBuild `
+                               -TtdExe $ttdExe -Cdb $Cdb -CdbX64Exe $cdbX64Exe -CdbX86Exe $cdbX86Exe -CdbArgs $CdbArgs
+
+            if ($r.InfraError) { Write-Host ''; Write-Error $r.InfraError; exit 1 }
+
+            switch ($r.TestStatus) {
+                'TIMEOUT' { Write-Host " TIMEOUT (>${TimeoutSeconds}s)" -ForegroundColor Yellow }
+                'PASS'    { Write-Host " PASS ($($r.TestDetail))" }
+                'FAIL'    { Write-Host " FAIL ($($r.TestDetail))"
+                            $r.FailLines | Select-Object -First 10 | ForEach-Object { Write-Host "    $_" } }
+            }
+
+            $iterResults += $r
+
+            if ($StopOnFailure -and $r.TestStatus -in 'FAIL', 'TIMEOUT') {
+                Write-Host "  Stopping after first failure (-StopOnFailure)." -ForegroundColor Yellow
+                $stopEarly = $true
+                break
+            }
+        }
+
+        $allIterResults += $iterResults
+
+        # Clean up this iteration's subfolder immediately if everything passed.
+        $iterOk = -not ($iterResults | Where-Object { $_.TestStatus -ne 'PASS' })
+        if ($Repeat -gt 1 -and $iterOk -and -not $KeepResults) {
+            $ProgressPreference = 'SilentlyContinue'
+            Remove-Item -Recurse -Force $iterDir
+            $ProgressPreference = 'Continue'
+        }
+
+        if ($Repeat -gt 1) { Write-Host '' }
+        if ($stopEarly) { break }
+    }
+
+    Write-Progress -Activity 'run-tests.ps1' -Completed
+} else {
+    # =======================================================================
+    # Parallel — dispatch the flat (iteration x config) work list through a
+    # runspace pool (-ThrottleLimit $Parallel).
+    # =======================================================================
+    $work = foreach ($iter in 1..$Repeat) {
+        $iterDir = Get-IterDir $iter
+        $null = New-Item -ItemType Directory -Path $iterDir -Force
+        foreach ($cfg in $configs) {
+            [pscustomobject]@{
+                Iter    = $iter
+                IterDir = $iterDir
+                Cfg     = $cfg
+                TestExe = Join-Path $SolutionDir "build" "artifacts" "mhook-unit-tests" $cfg.OutDir "mhook-unit-tests.exe"
+            }
+        }
+    }
+
+    # ForEach-Object -Parallel runspaces don't inherit script functions, so pass
+    # their bodies in via $using: and re-create them.  The MhookStreamInterleaver
+    # type is AppDomain-global (Add-Type) and already visible to child runspaces.
+    $stopFlag         = [hashtable]::Synchronized(@{ stop = $false })
+    $invokeOneRunDef  = (Get-Item function:Invoke-OneRun).ScriptBlock.ToString()
+    $invokeTestExeDef = (Get-Item function:Invoke-TestExe).ScriptBlock.ToString()
+    $getCountsDef     = (Get-Item function:Get-GtestCounts).ScriptBlock.ToString()
+
+    $prog      = @{ runs = 0; iters = 0 }   # reference type → mutations persist across the consumer scope
+    $iterTally = @{}
+    $nConfigs  = $configs.Count
+
+    $allIterResults = $work | ForEach-Object -ThrottleLimit $Parallel -Parallel {
+        $job  = $_
+        $flag = $using:stopFlag
+
+        ${function:Invoke-TestExe}  = [scriptblock]::Create($using:invokeTestExeDef)
+        ${function:Get-GtestCounts} = [scriptblock]::Create($using:getCountsDef)
+        ${function:Invoke-OneRun}   = [scriptblock]::Create($using:invokeOneRunDef)
+
+        # Best-effort -StopOnFailure: a queued job started after a failure skips fast.
+        if (($using:StopOnFailure) -and $flag.stop) {
+            return [pscustomobject]@{
+                Iter = $job.Iter; Arch = $job.Cfg.OutArch; Config = $job.Cfg.MSBuildConfig
+                Build = 'SKIP'; TestStatus = 'SKIP'; TestDetail = $null; FailLines = @(); InfraError = $null
+            }
+        }
+
+        $r = Invoke-OneRun -Cfg $job.Cfg -Iter $job.Iter -IterDir $job.IterDir -TestExe $job.TestExe `
+                           -Filter $using:Filter -TimeoutSeconds $using:TimeoutSeconds -NoBuild:$using:NoBuild `
+                           -TtdExe $using:ttdExe -Cdb $using:Cdb -CdbX64Exe $using:cdbX64Exe `
+                           -CdbX86Exe $using:cdbX86Exe -CdbArgs $using:CdbArgs
+
+        if (($using:StopOnFailure) -and ($r.InfraError -or $r.TestStatus -in 'FAIL', 'TIMEOUT')) {
+            $flag.stop = $true
+        }
+        $r
+    } | ForEach-Object {
+        # Main-thread consumer: print each completion and keep the progress bar live.
+        $r = $_
+        $prog.runs++
+        if (-not $iterTally.ContainsKey($r.Iter)) { $iterTally[$r.Iter] = 0 }
+        $iterTally[$r.Iter]++
+        if ($iterTally[$r.Iter] -eq $nConfigs) { $prog.iters++ }
+
+        $label = "$($r.Config)|$($r.Arch)"
+        $tag   = if ($Repeat -gt 1) { "[iter $($r.Iter.ToString().PadLeft($padWidth, '0'))]  " } else { '' }
+        switch ($r.TestStatus) {
+            'TIMEOUT' { Write-Host "  $tag$label  TIMEOUT (>${TimeoutSeconds}s)" -ForegroundColor Yellow }
+            'PASS'    { Write-Host "  $tag$label  PASS ($($r.TestDetail))" }
+            'FAIL'    { Write-Host "  $tag$label  FAIL ($($r.TestDetail))" -ForegroundColor Red
+                        $r.FailLines | Select-Object -First 10 | ForEach-Object { Write-Host "    $_" } }
+            'NO EXE'  { Write-Host "  $tag$label  NO EXE" -ForegroundColor Red }
+        }
+        if ($r.InfraError) { Write-Error $r.InfraError }
+
+        Write-Progress -Activity 'run-tests.ps1' `
+            -Status "Completed $($prog.iters)/$Repeat iterations ($($prog.runs)/$totalWork runs)" `
+            -PercentComplete ([int]($prog.runs / $totalWork * 100))
+        $r
+    }
+
+    Write-Progress -Activity 'run-tests.ps1' -Completed
+
+    # End-of-run cleanup: drop each iteration's folder if none of its runs failed.
+    if ($Repeat -gt 1 -and -not $KeepResults) {
+        $ProgressPreference = 'SilentlyContinue'
+        foreach ($iter in 1..$Repeat) {
+            $rows = @($allIterResults | Where-Object { $_.Iter -eq $iter })
+            if (-not ($rows | Where-Object { $_.TestStatus -notin 'PASS', 'SKIP' })) {
+                Remove-Item -Recurse -Force (Get-IterDir $iter) -ErrorAction SilentlyContinue
+            }
+        }
+        $ProgressPreference = 'Continue'
+    }
+}
 
 # ---------------------------------------------------------------------------
 # Aggregate results across all iterations (one row per config)

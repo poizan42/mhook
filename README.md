@@ -448,6 +448,11 @@ included as a git submodule under `third_party/googletest`).
 # Run each configuration N times to surface flaky tests (failed iterations keep their artifacts)
 .\run-tests.ps1 -NoBuild -Repeat 10
 
+# Parallelize the repeat/config work N runs at a time (much faster stress passes;
+# the extra contention also makes timing-sensitive races more likely to reproduce).
+# Raise -TimeoutSeconds since the machine is loaded.  Composes with -Trace/-Cdb.
+.\run-tests.ps1 -NoBuild -Arch x86 -Filter "MhookInjectTest.*Delay*" -Repeat 40 -Parallel 8 -TimeoutSeconds 120
+
 # Capture Time Travel Debugging traces alongside test logs (requires an elevated session)
 .\run-tests.ps1 -NoBuild -Trace -KeepResults
 
