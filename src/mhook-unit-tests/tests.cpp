@@ -9,6 +9,9 @@
 
 #include <gtest/gtest.h>
 
+#include <crtdbg.h>   // _CrtSetReportMode / _CRTDBG_*
+#include <stdlib.h>   // _set_abort_behavior, _set_invalid_parameter_handler
+
 // Win32 / Winsock headers — test code is allowed to use these.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -312,8 +315,48 @@ TEST(MhookTest, HookCanBeReinstalled) {
 // main
 // ---------------------------------------------------------------------------
 
+static void SilentInvalidParameter(const wchar_t *, const wchar_t *, const wchar_t *,
+                                   unsigned int, uintptr_t)
+{
+    // Swallow invalid-CRT-parameter reports rather than showing the debug box /
+    // fast-failing; the failing call simply returns / the test observes the error.
+}
+
+// Prevent any modal dialog from blocking an unattended (parallel/CI) test run.
+// GoogleTest does most of this itself, but only inside RUN_ALL_TESTS(), only when
+// catch_exceptions is on, only for _CRT_ASSERT, and not under a debugger — so do it
+// ourselves, unconditionally and early.  WER reporting is left enabled; only the UI
+// is suppressed.
+static void SuppressErrorDialogs()
+{
+    // No WER / GP-fault / critical-error / open-file boxes.  The error mode is
+    // INHERITED by child processes, so the cmd.exe targets these tests inject into
+    // also won't pop a fault box if injected code faults there.
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX |
+                 SEM_NOOPENFILEERRORBOX | SEM_NOALIGNMENTFAULTEXCEPT);
+
+    // abort(): clear only _WRITE_ABORT_MSG (the abort message box).  Keep
+    // _CALL_REPORTFAULT so WER still generates a crash report; its *dialog* is
+    // suppressed by SEM_NOGPFAULTERRORBOX above, so reporting stays silent.
+    _set_abort_behavior(0, _WRITE_ABORT_MSG);
+
+    // Invalid CRT parameter: swallow rather than show the debug box / fast-fail.
+    _set_invalid_parameter_handler(SilentInvalidParameter);
+
+#ifdef _DEBUG
+    // Debug-CRT assert/error/warn → stderr (+ debugger break), never a dialog.
+    // Covers _CRT_ERROR / RTC reports that gtest's _CRT_ASSERT-only redirect misses,
+    // and applies even under a debugger (gtest skips its redirect there).
+    for (int rt : { _CRT_ASSERT, _CRT_ERROR, _CRT_WARN }) {
+        _CrtSetReportMode(rt, _CRTDBG_MODE_FILE | _CRTDBG_MODE_DEBUG);
+        _CrtSetReportFile(rt, _CRTDBG_FILE_STDERR);
+    }
+#endif
+}
+
 int main(int argc, char **argv)
 {
+    SuppressErrorDialogs();
     ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }
