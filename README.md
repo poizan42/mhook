@@ -317,6 +317,18 @@ the injection on the caller's behalf and reports the result back.
   `MhookInjectProxyMain()` and an optional `MhookInjectProxyEntry` entry point) for you
   to link into your own x64 executable.
 
+> **Constraints on the proxy process (when linking `mhook_inject_proxy.lib`):** the
+> proxy is launched with `RtlCreateUserProcess` — the bare native process-creation
+> path, *not* `kernel32!CreateProcess`. So the proxy process has **no activation
+> context** (no SxS / manifest setup) and is **not registered with the Win32 subsystem
+> server (CSRSS)**. Win32 is not strictly forbidden, but a great many Win32 APIs assume
+> that registration and will fail or misbehave (console, much of USER32, anything that
+> RPCs to CSRSS, SxS-dependent loads, …). Keep code that runs in the proxy ntdll-only,
+> as `MhookInjectProxyMain` / `MhookInjectProxyEntry` do; the proxy's job is just to map
+> the section and call the ordinary (ntdll-only) same-arch `Mhook_Inject`. If you need a
+> fully Win32-capable helper, launch it yourself with `CreateProcess` and implement the
+> [wire contract](#proxy-wire-contract) instead.
+
 `ProxyPath` selects the proxy. With `NULL`, `Mhook_Inject` probes, relative to the
 module that contains it, `mhook_inject_proxy.exe` (flat, static) then
 `mhook_inject_proxy\mhook_inject_proxy.exe` (the dynamic bundle); an explicit path is
