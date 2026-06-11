@@ -216,6 +216,16 @@ typedef void (__cdecl *MhookInjectedFn)(MHOOK_INJECT_CONTEXT *ctx);
 // the user-supplied injection function.
 //
 // Returns S_OK on success, or an HRESULT error code.
+//
+// Cross-architecture: a 64-bit caller may inject into a 32-bit (WOW64) target.
+// In that case everything loaded into the target must be 32-bit — use the
+// DllPath + FunctionName form naming the x86 companion (the FunctionPointer form
+// is rejected), and for dynamic builds set MhookDllPath to the x86 mhook.dll (the
+// x86 mhook_inject.dll companion must sit next to it).  Synchronous and async-via-
+// Event completion work cross-arch; IoStatusBlock and ApcRoutine completion do not
+// (the 32-bit target cannot write back into the 64-bit caller) and are rejected
+// with MHOOK_INJECT_E_PARAMS.  The reverse (32-bit caller -> 64-bit target) is not
+// implemented and returns E_NOTIMPL.
 // ---------------------------------------------------------------------------
 
 HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params);

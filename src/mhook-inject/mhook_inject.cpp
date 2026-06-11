@@ -10,6 +10,7 @@
 
 #include "../nt_defs.h"
 #include "inject_params.h"
+#include "inject_bootstrap_thunk_x86_blob.h"  // kInjectBootstrapThunkX86 (cross-arch payload)
 
 // The library never includes <windows.h>; define the timeout sentinel locally.
 #ifndef INFINITE
@@ -68,7 +69,28 @@ static WCHAR *HeapDupWStr(const WCHAR *s)
 // FindDllBaseInProcess — walk the remote VA space to find a DLL by filename
 // ---------------------------------------------------------------------------
 
-static ULONG_PTR FindDllBaseInProcess(HANDLE hProcess, const WCHAR *targetName)
+// Case-insensitive: does the wide string [s, s+slen) contain `needle`?
+static BOOLEAN WStrContainsCI(const WCHAR *s, USHORT slen, const WCHAR *needle)
+{
+    USHORT nlen = 0; while (needle[nlen]) ++nlen;
+    if (nlen == 0) return TRUE;
+    if (slen < nlen) return FALSE;
+    auto lc = [](WCHAR c) -> WCHAR { return (c >= L'A' && c <= L'Z') ? (WCHAR)(c + (L'a' - L'A')) : c; };
+    for (USHORT i = 0; i + nlen <= slen; ++i) {
+        USHORT k = 0;
+        for (; k < nlen; ++k)
+            if (lc(s[i + k]) != lc(needle[k])) break;
+        if (k == nlen) return TRUE;
+    }
+    return FALSE;
+}
+
+// Find a loaded module's base by file name.  `requirePathSubstr` (optional) further
+// requires the mapped file's full path to contain that substring (case-insensitive) —
+// used to pick the 32-bit ntdll (path under "SysWOW64") in a WOW64 target, which also
+// maps the 64-bit ntdll of the same base name.
+static ULONG_PTR FindDllBaseInProcess(HANDLE hProcess, const WCHAR *targetName,
+                                      const WCHAR *requirePathSubstr = NULL)
 {
     // Allocate MemoryMappedFileInformation buffer on heap to avoid large frame
     const SIZE_T kBufSize = sizeof(UNICODE_STRING) + 2048 * sizeof(WCHAR);
@@ -110,6 +132,9 @@ static ULONG_PTR FindDllBaseInProcess(HANDLE hProcess, const WCHAR *targetName)
                         if (b >= L'A' && b <= L'Z') b += (L'a' - L'A');
                         if (a != b) { match = FALSE; break; }
                     }
+                    if (match && requirePathSubstr &&
+                        !WStrContainsCI(p, len, requirePathSubstr))
+                        match = FALSE;
                     if (match) {
                         result = (ULONG_PTR)mbi.AllocationBase;
                         break;
@@ -236,18 +261,6 @@ static WCHAR *GetDirectoryFromPath(const WCHAR *fullPath)
     return dir;
 }
 
-// ---------------------------------------------------------------------------
-// IsTargetWow64 — TRUE if target process is a WOW64 (32-bit) process
-// ---------------------------------------------------------------------------
-
-static BOOLEAN IsTargetWow64(HANDLE hProcess)
-{
-    PVOID wow64Info = NULL;
-    NTSTATUS st = NtQueryInformationProcess(hProcess, ProcessWow64Information,
-                                            &wow64Info, sizeof(wow64Info), NULL);
-    return NT_SUCCESS(st) && wow64Info != NULL;
-}
-
 // PROCESS_ALL_ACCESS is STANDARD_RIGHTS_REQUIRED | SYNCHRONIZE | 0xFFFF, i.e.
 // 0x1FFFFF on current Windows (NTDDI >= Vista).  Pin the value: if a future SDK
 // or OS adds process-specific access bits, this fails to compile and forces a
@@ -290,8 +303,25 @@ static BOOLEAN TargetHasAllAccess(HANDLE hProcess)
 // falls back to its own IsProcessInitialized() check (prior behavior).
 // ---------------------------------------------------------------------------
 
-static BOOLEAN TargetIsUninitialized(HANDLE hProcess)
+static BOOLEAN TargetIsUninitialized(HANDLE hProcess, PVOID wow64Peb = NULL)
 {
+    if (wow64Peb) {
+        // Cross-arch (WOW64 target): read the 32-bit PEB.  Its address is exactly
+        // the pointer ProcessWow64Information returns.  32-bit layout: PEB.Ldr is at
+        // +0x0C; PEB_LDR_DATA.Initialized (a BOOLEAN after the ULONG Length) at +0x04.
+        ULONG ldr32 = 0;
+        if (!NT_SUCCESS(NtReadVirtualMemory(hProcess, (PVOID)((ULONG_PTR)wow64Peb + 0x0C),
+                                            &ldr32, sizeof(ldr32), NULL)))
+            return FALSE;
+        if (!ldr32)
+            return TRUE;   // loader data not built yet
+        BYTE initialized = 0;
+        if (!NT_SUCCESS(NtReadVirtualMemory(hProcess, (PVOID)((ULONG_PTR)ldr32 + 0x04),
+                                            &initialized, sizeof(initialized), NULL)))
+            return FALSE;
+        return !initialized;
+    }
+
     PROCESS_BASIC_INFORMATION pbi = {};
     if (!NT_SUCCESS(NtQueryInformationProcess(hProcess, ProcessBasicInformation,
                                               &pbi, sizeof(pbi), NULL)) ||
@@ -378,8 +408,10 @@ static NTSTATUS ReadFileAt(HANDLE hFile, PVOID buf, ULONG len, ULONG offset)
 
 static NTSTATUS GetExportRvaFromFile(const WCHAR *dllPath,
                                      const CHAR  *exportName,
-                                     ULONG       *outRva)
+                                     ULONG       *outRva,
+                                     USHORT      *outMachine = NULL)
 {
+    if (outMachine) *outMachine = 0;
     // Build \??\<dllPath>  NT object path
     const WCHAR prefix[] = { L'\\', L'?', L'?', L'\\', L'\0' };
     const SIZE_T pfxLen = 4;
@@ -422,6 +454,7 @@ static NTSTATUS GetExportRvaFromFile(const WCHAR *dllPath,
     IMAGE_FILE_HEADER fhdr;
     ULONG fhdrOff = dos.e_lfanew + 4;
     if (!NT_SUCCESS(ReadFileAt(hFile, &fhdr, sizeof(fhdr), fhdrOff))) goto out;
+    if (outMachine) *outMachine = fhdr.Machine;
 
     WORD optMagic;
     ULONG optOffset = fhdrOff + sizeof(IMAGE_FILE_HEADER);
@@ -504,6 +537,28 @@ out:
     return st;
 }
 
+// Given the injector's native ntdll path (...\System32\ntdll.dll) produce the
+// 32-bit WOW64 ntdll path (...\SysWOW64\ntdll.dll) — both components are 8 chars,
+// so the last case-insensitive "System32" is overwritten in place.  Returns a
+// heap copy (caller frees); on no match the path is returned unchanged.
+static WCHAR *DeriveSysWow64Path(const WCHAR *nativePath)
+{
+    WCHAR *r = HeapDupWStr(nativePath);
+    if (!r) return NULL;
+    const WCHAR want[8] = { L's', L'y', L's', L't', L'e', L'm', L'3', L'2' };
+    const WCHAR repl[8] = { L'S', L'y', L's', L'W', L'O', L'W', L'6', L'4' };
+    auto lc = [](WCHAR c) -> WCHAR { return (c >= L'A' && c <= L'Z') ? (WCHAR)(c + (L'a' - L'A')) : c; };
+    SIZE_T n = 0; while (r[n]) ++n;
+    if (n >= 8) {
+        for (SIZE_T i = n - 8 + 1; i-- > 0; ) {
+            SIZE_T k = 0;
+            for (; k < 8; ++k) if (lc(r[i + k]) != want[k]) break;
+            if (k == 8) { for (k = 0; k < 8; ++k) r[i + k] = repl[k]; break; }
+        }
+    }
+    return r;
+}
+
 // ---------------------------------------------------------------------------
 // Mhook_Inject
 // ---------------------------------------------------------------------------
@@ -528,6 +583,32 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     // sign-bit-set value (means "no timeout").  0 means "use the default".
     if (params->TimeoutMs >= 0x80000000u && params->TimeoutMs != INFINITE)
         return MHOOK_INJECT_E_PARAMS;
+
+    // Determine the target architecture (x86/x64).  A non-NULL ProcessWow64Information
+    // pointer means the target is a 32-bit (WOW64) process; it is also the target's
+    // 32-bit PEB address (used for the cross-arch DELAY init check).
+    PVOID   wow64Peb   = NULL;
+    NtQueryInformationProcess(params->TargetProcess, ProcessWow64Information,
+                              &wow64Peb, sizeof(wow64Peb), NULL);
+    BOOLEAN targetIs32 = (wow64Peb != NULL);
+    BOOLEAN crossTo32  = FALSE;
+#ifdef _M_X64
+    crossTo32 = targetIs32;                 // 64-bit injector + WOW64 target = cross 64->32
+#else
+    if (!targetIs32) return E_NOTIMPL;      // 32-bit injector + 64-bit target: deferred
+#endif
+
+    if (crossTo32) {
+        // Cross-arch constraints (see mhook_inject.h):
+        //  - the injection module must be named as an x86 file on disk, so the
+        //    FunctionPointer form (a VA in the x64 caller) is not allowed;
+        //  - IoStatusBlock/APC completion require the target to write back into the
+        //    64-bit caller, impossible from a 32-bit target (Event/sync still work).
+        if (useFnPtr)
+            return MHOOK_INJECT_E_PARAMS;
+        if (params->IoStatusBlock || params->ApcRoutine)
+            return MHOOK_INJECT_E_PARAMS;
+    }
 
     BOOLEAN isAsync = (params->Flags & MHOOK_INJECT_FLAG_ASYNC) != 0;
     // Synchronous + delay needs an internal kernel event: after the bootstrap
@@ -569,15 +650,31 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
 
 #ifdef MHOOK_INJECT_DYNAMIC
     isDynamic = TRUE;
-    companionPath = HeapDupWStr(selfPath);  // companion = mhook_inject.dll
 
-    if (useFnPtr) {
-        PVOID fnBase = GetModuleBase(params->FunctionPointer);
-        if (!fnBase) { hr = E_FAIL; goto cleanup; }
-        functionRva = (ULONG)((ULONG_PTR)params->FunctionPointer - (ULONG_PTR)fnBase);
-        targetDllPath = GetModuleFullPath(params->FunctionPointer);
+    if (crossTo32) {
+        // The companion (which exports _internal_Execute and is loaded into the
+        // target) must be the TARGET-architecture mhook_inject.dll — not this x64
+        // one.  It ships next to the matching mhook.dll, so derive it from
+        // MhookDllPath (required for cross-arch dynamic).  mhookPath is resolved
+        // here too; Step 4 then skips its own resolution.
+        if (!params->MhookDllPath) { hr = MHOOK_INJECT_E_PARAMS; goto cleanup; }
+        mhookPath = ResolveFullPath(selfDir, params->MhookDllPath);
+        if (!mhookPath) { hr = E_FAIL; goto cleanup; }
+        cmpDir = GetDirectoryFromPath(mhookPath);
+        if (!cmpDir) { hr = E_FAIL; goto cleanup; }
+        companionPath = AppendPathComponent(cmpDir, L"mhook_inject.dll");
+        targetDllPath = ResolveFullPath(selfDir, params->DllPath);  // user's x86 DLL
     } else {
-        targetDllPath = ResolveFullPath(selfDir, params->DllPath);
+        companionPath = HeapDupWStr(selfPath);  // companion = this mhook_inject.dll
+
+        if (useFnPtr) {
+            PVOID fnBase = GetModuleBase(params->FunctionPointer);
+            if (!fnBase) { hr = E_FAIL; goto cleanup; }
+            functionRva = (ULONG)((ULONG_PTR)params->FunctionPointer - (ULONG_PTR)fnBase);
+            targetDllPath = GetModuleFullPath(params->FunctionPointer);
+        } else {
+            targetDllPath = ResolveFullPath(selfDir, params->DllPath);
+        }
     }
 #else
     isDynamic = FALSE;
@@ -600,13 +697,28 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     // -----------------------------------------------------------------------
     ULONG executeRva;
     executeRva = 0;
-    st = GetExportRvaFromFile(companionPath, "_internal_Execute", &executeRva);
+    USHORT companionMachine;
+    companionMachine = 0;
+    st = GetExportRvaFromFile(companionPath, "_internal_Execute", &executeRva, &companionMachine);
     if (!NT_SUCCESS(st)) { hr = MHOOK_INJECT_E_NO_EXEC; goto cleanup; }
 
+    // The companion must match the TARGET architecture (an x86 companion for a
+    // WOW64 target, x64 for a native x64 target) — catch a wrong-arch DLL up front
+    // instead of failing obscurely in the remote thread.
+    {
+#ifdef _M_X64
+        USHORT nativeMachine = IMAGE_FILE_MACHINE_AMD64;
+#else
+        USHORT nativeMachine = IMAGE_FILE_MACHINE_I386;
+#endif
+        USHORT wantMachine = crossTo32 ? IMAGE_FILE_MACHINE_I386 : nativeMachine;
+        if (companionMachine != wantMachine) { hr = MHOOK_INJECT_E_PARAMS; goto cleanup; }
+    }
+
     // -----------------------------------------------------------------------
-    // Step 4: Resolve mhook.dll path (dynamic builds only)
+    // Step 4: Resolve mhook.dll path (dynamic builds only; cross-arch already did)
     // -----------------------------------------------------------------------
-    if (isDynamic) {
+    if (isDynamic && !mhookPath) {
         cmpDir = GetDirectoryFromPath(companionPath);
         if (!cmpDir) { hr = E_FAIL; goto cleanup; }
 
@@ -619,46 +731,54 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     }
 
     // -----------------------------------------------------------------------
-    // Step 5: Determine target architecture; select bootstrap thunk
+    // Step 5: (target architecture already determined above as crossTo32)
     // -----------------------------------------------------------------------
     {
-    BOOLEAN targetIs32 = IsTargetWow64(params->TargetProcess);
-#ifdef _M_X64
-    if (targetIs32) { hr = E_NOTIMPL; goto cleanup; }
-#else
-    if (!targetIs32) { hr = E_NOTIMPL; goto cleanup; }
-#endif
-
     // -----------------------------------------------------------------------
-    // Step 6: Find LdrLoadDll in target process
+    // Step 6: Find LdrLoadDll in the target's ntdll
     // -----------------------------------------------------------------------
-    ULONG_PTR remoteNtdllBase = FindDllBaseInProcess(params->TargetProcess, L"ntdll.dll");
-    if (!remoteNtdllBase) { hr = MHOOK_INJECT_E_NO_NTDLL; goto cleanup; }
+    // Same-arch: resolve from the injector's own ntdll (same RVAs as the target's,
+    // shared base).  Cross 64->32: resolve from the target's 32-bit ntdll
+    // (SysWOW64) — a WOW64 target maps both the 64-bit and the 32-bit ntdll under
+    // the same base name, so select by path, and parse the 32-bit file on disk
+    // (derived from the injector's own System32 ntdll path).
+    ULONG_PTR remoteNtdllBase = 0;
+    WCHAR    *ntdllFilePath   = NULL;   // file parsed for export RVAs
+    {
+        LDR_DATA_TABLE_ENTRY_MIN *ntdllEntry = FindModuleEntryByBaseName(L"ntdll.dll");
+        if (!ntdllEntry) { hr = E_FAIL; goto cleanup; }
+        WCHAR *localNtdllPath = GetModuleFullPath(ntdllEntry->DllBase);
+        if (!localNtdllPath) { hr = E_FAIL; goto cleanup; }
 
-    // Compute LdrLoadDll RVA from the local ntdll and apply to remote base.
-    // Look up ntdll by BaseDllName in the LDR — using &LdrLoadDll would give
-    // the address of the import thunk in the calling module, not ntdll itself.
-    LDR_DATA_TABLE_ENTRY_MIN *ntdllEntry = FindModuleEntryByBaseName(L"ntdll.dll");
-    if (!ntdllEntry) { hr = E_FAIL; goto cleanup; }
-
-    WCHAR *localNtdllPath = GetModuleFullPath(ntdllEntry->DllBase);
-    if (!localNtdllPath) { hr = E_FAIL; goto cleanup; }
+        if (crossTo32) {
+            remoteNtdllBase = FindDllBaseInProcess(params->TargetProcess, L"ntdll.dll", L"SysWOW64");
+            ntdllFilePath   = DeriveSysWow64Path(localNtdllPath);
+            HeapFreePath(localNtdllPath);
+        } else {
+            remoteNtdllBase = FindDllBaseInProcess(params->TargetProcess, L"ntdll.dll");
+            ntdllFilePath   = localNtdllPath;   // ownership transferred
+        }
+        if (!remoteNtdllBase) { HeapFreePath(ntdllFilePath); hr = MHOOK_INJECT_E_NO_NTDLL; goto cleanup; }
+        if (!ntdllFilePath)   { hr = E_FAIL; goto cleanup; }
+    }
 
     ULONG ldrRva = 0;
-    st = GetExportRvaFromFile(localNtdllPath, "LdrLoadDll", &ldrRva);
-    if (!NT_SUCCESS(st)) { HeapFreePath(localNtdllPath); hr = E_FAIL; goto cleanup; }
+    st = GetExportRvaFromFile(ntdllFilePath, "LdrLoadDll", &ldrRva);
+    if (!NT_SUCCESS(st)) { HeapFreePath(ntdllFilePath); hr = E_FAIL; goto cleanup; }
 
 #ifdef _M_X64
-    // x64: look up RtlAddFunctionTable / RtlDeleteFunctionTable so the
-    // bootstrap thunk can register and later remove dynamic unwind info for its
-    // own frame.  Non-fatal if absent — the bootstrap thunk guards against NULL.
+    // x64 same-arch only: look up RtlAddFunctionTable / RtlDeleteFunctionTable so
+    // the bootstrap thunk can register/remove dynamic unwind info for its own
+    // frame.  A 32-bit (cross) target has no SEH unwind table, so skip it.
     ULONG rtlAddFuncRva = 0, rtlDelFuncRva = 0;
-    GetExportRvaFromFile(localNtdllPath, "RtlAddFunctionTable",    &rtlAddFuncRva);
-    GetExportRvaFromFile(localNtdllPath, "RtlDeleteFunctionTable", &rtlDelFuncRva);
+    if (!crossTo32) {
+        GetExportRvaFromFile(ntdllFilePath, "RtlAddFunctionTable",    &rtlAddFuncRva);
+        GetExportRvaFromFile(ntdllFilePath, "RtlDeleteFunctionTable", &rtlDelFuncRva);
+    }
 #endif
 
-    HeapFreePath(localNtdllPath);
-    localNtdllPath = NULL;
+    HeapFreePath(ntdllFilePath);
+    ntdllFilePath = NULL;
 
     LdrLoadDllFn remoteLdrLoadDll =
         (LdrLoadDllFn)(remoteNtdllBase + ldrRva);
@@ -666,8 +786,19 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     // -----------------------------------------------------------------------
     // Step 7: Calculate remote memory layout
     // -----------------------------------------------------------------------
-    SIZE_T codeSize   = (SIZE_T)((BYTE*)InjectBootstrapThunkEnd - (BYTE*)InjectBootstrapThunkEntry);
-    SIZE_T paramsSize = sizeof(MHOOK_INJECT_REMOTE_PARAMS);
+    // Cross 64->32 embeds the x86 thunk blob + the fixed-width x86 params layout;
+    // same-arch uses the linked native thunk + native params.
+    const void *thunkSrc;
+    SIZE_T codeSize, paramsSize;
+    if (crossTo32) {
+        thunkSrc   = kInjectBootstrapThunkX86;
+        codeSize   = sizeof(kInjectBootstrapThunkX86);
+        paramsSize = sizeof(MHOOK_INJECT_REMOTE_PARAMS_X86);
+    } else {
+        thunkSrc   = InjectBootstrapThunkEntry;
+        codeSize   = (SIZE_T)((BYTE*)InjectBootstrapThunkEnd - (BYTE*)InjectBootstrapThunkEntry);
+        paramsSize = sizeof(MHOOK_INJECT_REMOTE_PARAMS);
+    }
 
     auto WStrBytes = [](const WCHAR *s) -> SIZE_T {
         if (!s || !s[0]) return 0;
@@ -715,7 +846,7 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
         rp.RemoteFlags |= MHOOK_REMOTE_FLAG_DELAY_UNTIL_INIT;
         // Read the target's loader-init state NOW, before the injection thread
         // perturbs it, so the delayed-vs-immediate decision is authoritative.
-        if (TargetIsUninitialized(params->TargetProcess))
+        if (TargetIsUninitialized(params->TargetProcess, crossTo32 ? wow64Peb : NULL))
             rp.RemoteFlags |= MHOOK_REMOTE_FLAG_TARGET_UNINITIALIZED;
     }
     rp.FunctionRva    = functionRva;
@@ -730,7 +861,7 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
     // sub rsp,20h (4 bytes).  UNWIND_INFO carries UnwindCode[0] inline; the second
     // code lives in the contiguous BootstrapThunkUC field.
     enum { UNWIND_REG_RBX = 3 };                     // OpInfo register code for RBX
-    if (rtlAddFuncRva) {
+    if (!crossTo32 && rtlAddFuncRva) {               // x86 (cross) target: no unwind table
         rp.RtlAddFunctionTable    = (PVOID)(remoteNtdllBase + rtlAddFuncRva);
         rp.RtlDeleteFunctionTable = rtlDelFuncRva
                                     ? (PVOID)(remoteNtdllBase + rtlDelFuncRva)
@@ -836,12 +967,44 @@ HRESULT __cdecl Mhook_Inject(MHOOK_INJECT_PARAMS *params)
         }
     }
 
+    // Cross 64->32: serialize the params into the fixed-width x86 layout (every
+    // pointer/handle is a remote <4 GB address that fits a ULONG).  All field
+    // VALUES were computed into `rp` above; truncate them into `rp86`.
+    MHOOK_INJECT_REMOTE_PARAMS_X86 rp86;
+    const void *paramsSrc = &rp;
+    if (crossTo32) {
+        RtlZeroMemory(&rp86, sizeof(rp86));
+        auto toU32 = [](void *p) -> ULONG { return (ULONG)(ULONG_PTR)p; };
+        rp86.LdrLoadDll                   = toU32((void*)rp.LdrLoadDll);
+        rp86.CompanionPath.Length         = rp.CompanionPath.Length;
+        rp86.CompanionPath.MaximumLength  = rp.CompanionPath.MaximumLength;
+        rp86.CompanionPath.Buffer         = toU32(rp.CompanionPath.Buffer);
+        rp86.ExecuteOffset                = (ULONG)rp.ExecuteOffset;
+        rp86.IsDynamic                    = rp.IsDynamic;
+        rp86.RemoteFlags                  = rp.RemoteFlags;
+        rp86.MhookPath.Length             = rp.MhookPath.Length;
+        rp86.MhookPath.MaximumLength      = rp.MhookPath.MaximumLength;
+        rp86.MhookPath.Buffer             = toU32(rp.MhookPath.Buffer);
+        rp86.TargetDllPath.Length         = rp.TargetDllPath.Length;
+        rp86.TargetDllPath.MaximumLength  = rp.TargetDllPath.MaximumLength;
+        rp86.TargetDllPath.Buffer         = toU32(rp.TargetDllPath.Buffer);
+        rp86.FunctionName.Length          = rp.FunctionName.Length;
+        rp86.FunctionName.MaximumLength   = rp.FunctionName.MaximumLength;
+        rp86.FunctionName.Buffer          = toU32(rp.FunctionName.Buffer);
+        rp86.FunctionRva                  = rp.FunctionRva;
+        rp86.UserData                     = toU32(rp.UserData);
+        rp86.UserDataSize                 = (ULONG)rp.UserDataSize;
+        rp86.CompletionEvent              = toU32(rp.CompletionEvent);
+        // CallerProcess/Thread/Apc/IoStatusBlock stay 0 (rejected for cross-arch).
+        paramsSrc = &rp86;
+    }
+
 #define WRITE(dst, src, len) \
     do { st = NtWriteVirtualMemory(params->TargetProcess, dst, (PVOID)(src), len, NULL); \
          if (!NT_SUCCESS(st)) { hr = HrFromNt(st); goto cleanup; } } while(0)
 
-    WRITE(rCode,              InjectBootstrapThunkEntry, codeSize);
-    WRITE(rCode + codeSize,   &rp,            paramsSize);
+    WRITE(rCode,              thunkSrc,       codeSize);
+    WRITE(rCode + codeSize,   paramsSrc,      paramsSize);
     WRITE(rCompanion,         companionPath,  companionBytes);
     if (isDynamic && mhookPath && mhookBytes)
         WRITE(rMhook,         mhookPath,      mhookBytes);

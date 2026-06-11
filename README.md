@@ -246,6 +246,24 @@ WaitForSingleObject(done, INFINITE);    // the injection function has now return
 > you let the target run (e.g. resume it from another thread) or the timeout
 > (`TimeoutMs`, default 30 s) elapses. Resume the target concurrently, or use `ASYNC`.
 
+### Cross-architecture injection (64-bit → 32-bit)
+
+A 64-bit process can inject into a 32-bit (WOW64) target. Everything loaded into the
+target must be 32-bit:
+
+- Use the **`DllPath` + `FunctionName`** form pointing at the **x86** companion (the
+  `FunctionPointer` form is rejected cross-arch).
+- For **dynamic** builds, set `MhookDllPath` to the **x86** `mhook.dll`; the x86
+  `mhook_inject.dll` companion must sit in the same directory.
+- The companion's PE machine must match the target, else `MHOOK_INJECT_E_PARAMS`.
+- Completion: synchronous (incl. `DELAY_UNTIL_INIT`) and **async via `Event`** work.
+  `IoStatusBlock` and `ApcRoutine` completion are **not** supported cross-arch (a
+  32-bit target cannot write back into the 64-bit caller) and return
+  `MHOOK_INJECT_E_PARAMS`.
+
+The reverse direction (32-bit → 64-bit) is **not implemented** and returns `E_NOTIMPL`
+— there is no clean, ntdll-only way to create a 64-bit thread from a WOW64 process.
+
 ### `MHOOK_INJECT_CONTEXT` (received by the injected function)
 
 ```c

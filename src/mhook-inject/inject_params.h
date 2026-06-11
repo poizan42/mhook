@@ -182,3 +182,73 @@ INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, ApcContext)         ==
 INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS, IoStatusBlock)      == 100, "layout");
 INJECT_STATIC_ASSERT(sizeof(MHOOK_INJECT_REMOTE_PARAMS)                       == 104, "layout");
 #endif
+
+// ---------------------------------------------------------------------------
+// MHOOK_INJECT_REMOTE_PARAMS_X86 — explicit, fixed-width x86 layout.
+//
+// Used by an x64 injector to build the remote params for a 32-bit (WOW64)
+// target (cross-architecture 64-bit -> 32-bit injection): every pointer/handle/
+// SIZE_T is 4 bytes and the strings are the 8-byte x86 UNICODE_STRING/ANSI_STRING
+// shape, so the struct is binary-identical to what the native x86
+// MHOOK_INJECT_REMOTE_PARAMS (above) would produce when compiled for Win32.
+// There is no x64 unwind tail (an x86 target registers no function table).
+//
+// The asserts below are compiled in BOTH builds so the x86 ABI this injector
+// writes stays pinned regardless of which architecture mhook_inject is built for.
+// ---------------------------------------------------------------------------
+
+#pragma pack(push, 1)
+typedef struct _MHOOK_STR32 {     // x86 UNICODE_STRING / ANSI_STRING (8 bytes)
+    USHORT Length;
+    USHORT MaximumLength;
+    ULONG  Buffer;                // 32-bit pointer in the target
+} MHOOK_STR32;
+
+typedef struct _MHOOK_INJECT_REMOTE_PARAMS_X86 {
+    ULONG       LdrLoadDll;            // @  0  fn ptr (remote 32-bit ntdll!LdrLoadDll)
+    MHOOK_STR32 CompanionPath;         // @  4
+    ULONG       CompanionHandle;       // @ 12
+    ULONG       ExecuteOffset;         // @ 16  RVA of _internal_Execute
+    ULONG       IsDynamic;             // @ 20
+    ULONG       RemoteFlags;           // @ 24  MHOOK_REMOTE_FLAG_*
+    MHOOK_STR32 MhookPath;             // @ 28
+    ULONG       MhookHandle;           // @ 36
+    MHOOK_STR32 TargetDllPath;         // @ 40
+    MHOOK_STR32 FunctionName;          // @ 48
+    ULONG       FunctionRva;           // @ 56
+    ULONG       _rvapad;               // @ 60
+    ULONG       UserData;              // @ 64  remote 32-bit ptr
+    ULONG       UserDataSize;          // @ 68
+    NTSTATUS    InjectStatus;          // @ 72
+    NTSTATUS    LdrCompanionStatus;    // @ 76
+    ULONG       CompletionEvent;       // @ 80
+    ULONG       CallerProcess;         // @ 84
+    ULONG       CallerThread;          // @ 88
+    ULONG       ApcRoutine;            // @ 92
+    ULONG       ApcContext;            // @ 96
+    ULONG       IoStatusBlock;         // @100
+} MHOOK_INJECT_REMOTE_PARAMS_X86;      // 104 bytes
+#pragma pack(pop)
+
+INJECT_STATIC_ASSERT(sizeof(MHOOK_STR32)                                          ==   8, "x86 string");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, CompanionPath)      ==   4, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, CompanionHandle)    ==  12, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, ExecuteOffset)      ==  16, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, IsDynamic)          ==  20, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, RemoteFlags)        ==  24, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, MhookPath)          ==  28, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, MhookHandle)        ==  36, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, TargetDllPath)      ==  40, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, FunctionName)       ==  48, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, FunctionRva)        ==  56, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, UserData)           ==  64, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, UserDataSize)       ==  68, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, InjectStatus)       ==  72, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, LdrCompanionStatus) ==  76, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, CompletionEvent)    ==  80, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, CallerProcess)      ==  84, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, CallerThread)       ==  88, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, ApcRoutine)         ==  92, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, ApcContext)         ==  96, "x86 layout");
+INJECT_STATIC_ASSERT(offsetof(MHOOK_INJECT_REMOTE_PARAMS_X86, IoStatusBlock)      == 100, "x86 layout");
+INJECT_STATIC_ASSERT(sizeof(MHOOK_INJECT_REMOTE_PARAMS_X86)                        == 104, "x86 layout");

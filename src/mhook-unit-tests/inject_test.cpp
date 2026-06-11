@@ -818,3 +818,331 @@ TEST(MhookInjectTest, AsyncApcRuns)
     EXPECT_EQ(apcStatus, (NTSTATUS)0)
         << "APC saw non-success IoStatusBlock.Status: 0x" << std::hex << apcStatus;
 }
+
+// ===========================================================================
+// Cross-architecture injection (64-bit injector -> 32-bit WOW64 target).
+// These run only from the x64 test exe; the 32->64 direction stays E_NOTIMPL.
+// ===========================================================================
+
+namespace {
+// Directory holding the x86 build artifacts mirroring this x64 test exe.  The
+// build copies the x86 companion, mhook.dll and mhook_inject.dll together into
+// mhook-unit-tests\Win32\<config>\, so swapping the "\x64\" path component for
+// "\Win32\" yields a directory with all three.  "" if not an x64/<config> layout.
+std::wstring SiblingX86Dir()
+{
+    std::wstring dir = GetTestExeDir();              // trailing backslash
+    const std::wstring from = L"\\x64\\", to = L"\\Win32\\";
+    size_t pos = dir.rfind(from);
+    if (pos == std::wstring::npos) return L"";
+    dir.replace(pos, from.size(), to);
+    return dir;
+}
+
+bool FileExists(const std::wstring &p)
+{
+    return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+// The 32-bit cmd.exe (%WINDIR%\SysWOW64\cmd.exe).  A 64-bit process referencing
+// SysWOW64 is NOT file-system-redirected, so this is the real 32-bit binary.
+bool Get32BitCmdPath(std::wstring &out)
+{
+    wchar_t win[MAX_PATH];
+    UINT n = GetWindowsDirectoryW(win, MAX_PATH);
+    if (!n || n >= MAX_PATH) return false;
+    out = std::wstring(win) + L"\\SysWOW64\\cmd.exe";
+    return FileExists(out);
+}
+
+// Create a suspended process from an explicit exe path, stdout/stderr -> a pipe.
+bool CreateSuspendedExe(const wchar_t *exePath, PROCESS_INFORMATION *pi,
+                        HANDLE *hRead, HANDLE *hWrite)
+{
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+    if (!CreatePipe(hRead, hWrite, &sa, 0)) return false;
+    HANDLE hNullIn = CreateFileW(L"nul", GENERIC_READ,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                 &sa, OPEN_EXISTING, 0, NULL);
+    std::wstring cmdline = exePath;                  // mutable buffer for CreateProcessW
+    STARTUPINFOW si = { sizeof(si) };
+    si.dwFlags    = STARTF_USESTDHANDLES;
+    si.hStdInput  = hNullIn;
+    si.hStdOutput = *hWrite;
+    si.hStdError  = *hWrite;
+    BOOL ok = CreateProcessW(exePath, &cmdline[0], NULL, NULL, TRUE,
+                             CREATE_SUSPENDED | CREATE_NO_WINDOW, NULL, NULL, &si, pi);
+    CloseHandle(hNullIn);
+    if (!ok) {
+        CloseHandle(*hRead); CloseHandle(*hWrite);
+        *hRead = *hWrite = NULL;
+        return false;
+    }
+    return true;
+}
+} // namespace
+
+#ifdef _M_X64
+
+// Fill the common cross-arch params (x86 companion + DllPath form).  For dynamic
+// builds the x86 mhook.dll is required (the x86 mhook_inject.dll companion ships
+// beside it).  Returns false (with a skip reason) if the x86 artifacts are absent.
+#ifdef MHOOK_STATIC
+#  define CROSS_SET_MHOOK(p, mh)   ((void)0)
+#else
+#  define CROSS_SET_MHOOK(p, mh)   ((p).MhookDllPath = (mh).c_str())
+#endif
+
+// Sync immediate: inject the x86 companion into a suspended 32-bit cmd.exe and
+// confirm the injected function writes its marker to the target's stdout.
+TEST(MhookInjectTest, CrossArch_InjectsInto32BitTarget)
+{
+    std::wstring x86dir = SiblingX86Dir();
+    if (x86dir.empty()) GTEST_SKIP() << "test exe is not under .../x64/<config>/";
+    std::wstring companion = x86dir + L"mhook_inject_test_companion.dll";
+    std::wstring mhookdll  = x86dir + L"mhook.dll";
+    if (!FileExists(companion)) GTEST_SKIP() << "x86 companion not built";
+
+    std::wstring cmd32;
+    if (!Get32BitCmdPath(cmd32)) GTEST_SKIP() << "no SysWOW64\\cmd.exe";
+
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedExe(cmd32.c_str(), &pi, &hRead, &hWrite))
+        GTEST_SKIP() << "could not create 32-bit cmd.exe (" << GetLastError() << ")";
+
+    MHOOK_INJECT_PARAMS p = {};
+    p.Size          = sizeof(p);
+    p.TargetProcess = pi.hProcess;
+    p.DllPath       = companion.c_str();
+    p.FunctionName  = "Inject_WriteMarkerAndResume";
+    CROSS_SET_MHOOK(p, mhookdll);
+
+    HRESULT hr = Mhook_Inject(&p);
+    if (SUCCEEDED(hr)) ResumeThread(pi.hThread);
+
+    CloseHandle(hWrite);
+    std::string output = DrainPipe(hRead, 15000);
+    WaitForSingleObject(pi.hProcess, 5000);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead);
+
+    EXPECT_HRESULT_SUCCEEDED(hr) << "cross 64->32 inject failed: 0x" << std::hex << hr;
+    EXPECT_TRUE(output.find("MHOOK_INJECT_OK") != std::string::npos)
+        << "marker not found. Output: [" << output << "]";
+}
+
+// Async + Event: cross-arch completion via a duplicated event (handle-based, so it
+// works across the bitness boundary, unlike IoStatusBlock/APC).
+TEST(MhookInjectTest, CrossArch_AsyncEventInto32BitTarget)
+{
+    std::wstring x86dir = SiblingX86Dir();
+    if (x86dir.empty()) GTEST_SKIP() << "test exe is not under .../x64/<config>/";
+    std::wstring companion = x86dir + L"mhook_inject_test_companion.dll";
+    std::wstring mhookdll  = x86dir + L"mhook.dll";
+    if (!FileExists(companion)) GTEST_SKIP() << "x86 companion not built";
+
+    std::wstring cmd32;
+    if (!Get32BitCmdPath(cmd32)) GTEST_SKIP() << "no SysWOW64\\cmd.exe";
+
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedExe(cmd32.c_str(), &pi, &hRead, &hWrite))
+        GTEST_SKIP() << "could not create 32-bit cmd.exe (" << GetLastError() << ")";
+
+    HANDLE hEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+    ASSERT_NE(hEvent, (HANDLE)NULL);
+
+    MHOOK_INJECT_PARAMS p = {};
+    p.Size          = sizeof(p);
+    p.TargetProcess = pi.hProcess;
+    p.DllPath       = companion.c_str();
+    p.FunctionName  = "Inject_WriteMarkerAndResume";
+    p.Flags         = MHOOK_INJECT_FLAG_ASYNC;
+    p.Event         = hEvent;
+    CROSS_SET_MHOOK(p, mhookdll);
+
+    HRESULT hr = Mhook_Inject(&p);
+    DWORD waited = WaitForSingleObject(hEvent, 15000);
+
+    ResumeThread(pi.hThread);
+    CloseHandle(hWrite);
+    std::string output = DrainPipe(hRead, 15000);
+    WaitForSingleObject(pi.hProcess, 5000);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead); CloseHandle(hEvent);
+
+    EXPECT_HRESULT_SUCCEEDED(hr) << "cross async inject failed: 0x" << std::hex << hr;
+    EXPECT_EQ(waited, (DWORD)WAIT_OBJECT_0) << "completion event was not signalled";
+    EXPECT_TRUE(output.find("MHOOK_INJECT_OK") != std::string::npos)
+        << "marker not found. Output: [" << output << "]";
+}
+
+// Sync + DELAY_UNTIL_INIT: the entry-point hook (x86, target-side) fires once the
+// 32-bit main thread runs; the caller reads the target's 32-bit PEB init state.
+TEST(MhookInjectTest, CrossArch_DelayInto32BitTarget)
+{
+    std::wstring x86dir = SiblingX86Dir();
+    if (x86dir.empty()) GTEST_SKIP() << "test exe is not under .../x64/<config>/";
+    std::wstring companion = x86dir + L"mhook_inject_test_companion.dll";
+    std::wstring mhookdll  = x86dir + L"mhook.dll";
+    if (!FileExists(companion)) GTEST_SKIP() << "x86 companion not built";
+
+    std::wstring cmd32;
+    if (!Get32BitCmdPath(cmd32)) GTEST_SKIP() << "no SysWOW64\\cmd.exe";
+
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedExe(cmd32.c_str(), &pi, &hRead, &hWrite))
+        GTEST_SKIP() << "could not create 32-bit cmd.exe (" << GetLastError() << ")";
+
+    MHOOK_INJECT_PARAMS p = {};
+    p.Size          = sizeof(p);
+    p.TargetProcess = pi.hProcess;
+    p.DllPath       = companion.c_str();
+    p.FunctionName  = "Inject_WriteMarkerAndResume";
+    p.Flags         = MHOOK_INJECT_FLAG_DELAY_UNTIL_INIT;
+    CROSS_SET_MHOOK(p, mhookdll);
+
+    HANDLE hResume = CreateThread(NULL, 0, DelayedResumeProc, pi.hThread, 0, NULL);
+    HRESULT hr = Mhook_Inject(&p);
+    if (hResume) { WaitForSingleObject(hResume, 5000); CloseHandle(hResume); }
+
+    CloseHandle(hWrite);
+    std::string output = DrainPipe(hRead, 15000);
+    WaitForSingleObject(pi.hProcess, 5000);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); CloseHandle(hRead);
+
+    EXPECT_HRESULT_SUCCEEDED(hr) << "cross delayed inject failed: 0x" << std::hex << hr;
+    EXPECT_TRUE(output.find("MHOOK_INJECT_OK") != std::string::npos)
+        << "marker not found. Output: [" << output << "]";
+}
+
+// Cross-arch rejects the modes that can't work across the bitness boundary, and a
+// wrong-architecture companion, each with MHOOK_INJECT_E_PARAMS.
+TEST(MhookInjectTest, CrossArch_RejectsUnsupportedModes)
+{
+    std::wstring x86dir = SiblingX86Dir();
+    if (x86dir.empty()) GTEST_SKIP() << "test exe is not under .../x64/<config>/";
+    std::wstring companion = x86dir + L"mhook_inject_test_companion.dll";
+    std::wstring mhookdll  = x86dir + L"mhook.dll";
+    if (!FileExists(companion)) GTEST_SKIP() << "x86 companion not built";
+
+    std::wstring cmd32;
+    if (!Get32BitCmdPath(cmd32)) GTEST_SKIP() << "no SysWOW64\\cmd.exe";
+
+    auto freshTarget = [&](PROCESS_INFORMATION *pi, HANDLE *r, HANDLE *w) -> bool {
+        return CreateSuspendedExe(cmd32.c_str(), pi, r, w);
+    };
+    auto cleanup = [](PROCESS_INFORMATION *pi, HANDLE r, HANDLE w) {
+        if (w) CloseHandle(w);
+        TerminateProcess(pi->hProcess, 1);
+        CloseHandle(pi->hProcess); CloseHandle(pi->hThread); if (r) CloseHandle(r);
+    };
+
+    // (a) FunctionPointer form is not allowed cross-arch (must name an x86 file).
+    {
+        PROCESS_INFORMATION pi = {}; HANDLE r = NULL, w = NULL;
+        if (!freshTarget(&pi, &r, &w)) GTEST_SKIP() << "no 32-bit cmd";
+        MHOOK_INJECT_PARAMS p = {};
+        p.Size = sizeof(p); p.TargetProcess = pi.hProcess;
+        p.FunctionPointer = (PVOID)&SiblingX86Dir;   // any VA in this x64 process
+        HRESULT hr = Mhook_Inject(&p);
+        cleanup(&pi, r, w);
+        EXPECT_EQ(hr, MHOOK_INJECT_E_PARAMS) << "FunctionPointer form should be rejected cross-arch";
+    }
+    // (b) async IoStatusBlock cannot be written back into the 64-bit caller.
+    {
+        PROCESS_INFORMATION pi = {}; HANDLE r = NULL, w = NULL;
+        if (!freshTarget(&pi, &r, &w)) GTEST_SKIP() << "no 32-bit cmd";
+        IO_STATUS_BLOCK iosb = {};
+        MHOOK_INJECT_PARAMS p = {};
+        p.Size = sizeof(p); p.TargetProcess = pi.hProcess;
+        p.DllPath = companion.c_str(); p.FunctionName = "Inject_WriteMarkerAndResume";
+        p.Flags = MHOOK_INJECT_FLAG_ASYNC; p.IoStatusBlock = &iosb;
+        CROSS_SET_MHOOK(p, mhookdll);
+        HRESULT hr = Mhook_Inject(&p);
+        cleanup(&pi, r, w);
+        EXPECT_EQ(hr, MHOOK_INJECT_E_PARAMS) << "IoStatusBlock should be rejected cross-arch";
+    }
+    // (c) async APC routine cannot run in the 64-bit caller from a 32-bit target.
+    {
+        PROCESS_INFORMATION pi = {}; HANDLE r = NULL, w = NULL;
+        if (!freshTarget(&pi, &r, &w)) GTEST_SKIP() << "no 32-bit cmd";
+        MHOOK_INJECT_PARAMS p = {};
+        p.Size = sizeof(p); p.TargetProcess = pi.hProcess;
+        p.DllPath = companion.c_str(); p.FunctionName = "Inject_WriteMarkerAndResume";
+        p.Flags = MHOOK_INJECT_FLAG_ASYNC; p.ApcRoutine = TestApcRoutine;
+        CROSS_SET_MHOOK(p, mhookdll);
+        HRESULT hr = Mhook_Inject(&p);
+        cleanup(&pi, r, w);
+        EXPECT_EQ(hr, MHOOK_INJECT_E_PARAMS) << "ApcRoutine should be rejected cross-arch";
+    }
+#ifdef MHOOK_STATIC
+    // (d) a wrong-architecture (x64) companion against a 32-bit target is rejected.
+    // Static only: here DllPath IS the companion whose machine is validated.  In
+    // dynamic builds the validated companion is the x86 mhook_inject.dll (derived
+    // from MhookDllPath); DllPath is the user DLL, loaded by the target.
+    {
+        PROCESS_INFORMATION pi = {}; HANDLE r = NULL, w = NULL;
+        if (!freshTarget(&pi, &r, &w)) GTEST_SKIP() << "no 32-bit cmd";
+        std::wstring x64companion = GetTestExeDir() + L"mhook_inject_test_companion.dll";
+        MHOOK_INJECT_PARAMS p = {};
+        p.Size = sizeof(p); p.TargetProcess = pi.hProcess;
+        p.DllPath = x64companion.c_str(); p.FunctionName = "Inject_WriteMarkerAndResume";
+        HRESULT hr = Mhook_Inject(&p);
+        cleanup(&pi, r, w);
+        EXPECT_EQ(hr, MHOOK_INJECT_E_PARAMS) << "wrong-arch companion should be rejected";
+    }
+#endif
+}
+
+#else  // !_M_X64  — the 32-bit injector
+
+// 32-bit -> 64-bit injection is deliberately not implemented; it must report
+// E_NOTIMPL rather than misbehave.  A 32-bit process must launch the native
+// 64-bit cmd.exe through the Sysnative alias (System32 is redirected to SysWOW64).
+TEST(MhookInjectTest, CrossArch_32to64StillNotImplemented)
+{
+    wchar_t win[MAX_PATH];
+    UINT n = GetWindowsDirectoryW(win, MAX_PATH);
+    if (!n || n >= MAX_PATH) GTEST_SKIP() << "GetWindowsDirectory failed";
+    std::wstring cmd64 = std::wstring(win) + L"\\Sysnative\\cmd.exe";
+    if (!FileExists(cmd64)) GTEST_SKIP() << "no 64-bit cmd.exe via Sysnative (32-bit-only OS?)";
+
+    PROCESS_INFORMATION pi = {}; HANDLE hRead = NULL, hWrite = NULL;
+    if (!CreateSuspendedExe(cmd64.c_str(), &pi, &hRead, &hWrite))
+        GTEST_SKIP() << "could not create 64-bit cmd.exe (" << GetLastError() << ")";
+
+    MHOOK_INJECT_PARAMS p = {};
+    p.Size          = sizeof(p);
+    p.TargetProcess = pi.hProcess;
+    p.DllPath       = L"mhook_inject_test_companion.dll";
+    p.FunctionName  = "Inject_WriteMarkerAndResume";
+
+    HRESULT hr = Mhook_Inject(&p);
+
+    if (hWrite) CloseHandle(hWrite);
+    TerminateProcess(pi.hProcess, 1);
+    CloseHandle(pi.hProcess); CloseHandle(pi.hThread); if (hRead) CloseHandle(hRead);
+
+    EXPECT_EQ(hr, E_NOTIMPL) << "32->64 injection should report E_NOTIMPL; got 0x" << std::hex << hr;
+}
+
+#endif // _M_X64
+
+// Drift guard: the checked-in x86 bootstrap-thunk blob (embedded into the x64 build
+// for cross-arch) must equal the actually-assembled x86 thunk.  Verifiable in the
+// x86 STATIC RELEASE build: the symbol is linked in (static) and reached directly
+// (Release has no incremental-link ILT thunk that would alias it to a jmp stub).
+#if defined(_M_IX86) && defined(MHOOK_STATIC) && !defined(_DEBUG)
+#include "../mhook-inject/inject_bootstrap_thunk_x86_blob.h"
+extern "C" char InjectBootstrapThunkEntry[];
+extern "C" char InjectBootstrapThunkEnd[];
+TEST(MhookInjectTest, CrossArchThunkBlobMatches)
+{
+    size_t linkedSize = (size_t)(InjectBootstrapThunkEnd - InjectBootstrapThunkEntry);
+    ASSERT_EQ(linkedSize, sizeof(kInjectBootstrapThunkX86))
+        << "x86 thunk size changed — regenerate inject_bootstrap_thunk_x86_blob.h";
+    EXPECT_EQ(memcmp(InjectBootstrapThunkEntry, kInjectBootstrapThunkX86, linkedSize), 0)
+        << "x86 thunk bytes changed — regenerate inject_bootstrap_thunk_x86_blob.h";
+}
+#endif
