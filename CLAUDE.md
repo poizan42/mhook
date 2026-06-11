@@ -21,7 +21,9 @@ It ships in two halves: the **hook engine** (`Mhook_SetHook`/`Mhook_Unhook`, `sr
 .\build.ps1 -Configuration Release,ReleaseDynamic
 .\build.ps1 -Target x64/Release,x86/Debug
 
-# Single configuration via MSBuild directly
+# Single configuration via MSBuild directly (needs a VS Developer PowerShell, or a
+# full path to MSBuild — a plain shell has no `msbuild` on PATH; build.ps1 locates it
+# itself via Find-MSBuild, so prefer the -Target form above when in doubt)
 msbuild libmhook.slnx /p:Configuration=Release /p:Platform=x64
 ```
 
