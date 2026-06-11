@@ -380,10 +380,13 @@
     <MASM Include="inject_bootstrap_thunk_x64.asm">
       <ExcludedFromBuild Condition="'$(Platform)'!='x64'">true</ExcludedFromBuild>
     </MASM>
-    <!-- x86 bootstrap thunk: only assembled for Win32 targets -->
-    <MASM Include="inject_bootstrap_thunk_x86.asm">
+    <!-- x86 bootstrap thunk: only assembled for Win32 targets.  The item must be
+         Condition'd out (not merely ExcludedFromBuild) on x64, because on x64 the same
+         file is also pulled in as a CustomBuild item below to generate the cross-arch
+         data blob — and VS refuses to load a project where one file appears under two
+         item types simultaneously. -->
+    <MASM Include="inject_bootstrap_thunk_x86.asm" Condition="'$(Platform)'=='Win32'">
       <UseSafeExceptionHandlers>true</UseSafeExceptionHandlers>
-      <ExcludedFromBuild Condition="'$(Platform)'!='Win32'">true</ExcludedFromBuild>
     </MASM>
     <!-- Delayed-entry thunks: guarantee JMP (not call) to original entry point -->
     <MASM Include="inject_delayed_entry_thunk_x64.asm">
