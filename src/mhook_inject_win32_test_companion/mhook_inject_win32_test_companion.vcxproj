@@ -141,8 +141,8 @@
   <!-- Output paths — all configs -->
   <PropertyGroup>
     <TargetName>mhook_inject_win32_test_companion</TargetName>
-    <OutDir>$(SolutionDir)\build\artifacts\$(ShortProjectName)\$(Platform)\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)\build\obj\$(ShortProjectName)\$(Platform)\$(Configuration)\</IntDir>
+    <OutDir>$(SolutionDir)\build\artifacts\$(ProjectName)\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)\build\obj\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
 
   <!-- Compiler / linker settings (all 8 configs share most settings) -->

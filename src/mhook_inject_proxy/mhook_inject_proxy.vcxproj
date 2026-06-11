@@ -57,12 +57,10 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
 
-  <!-- Literal folder name (not $(ShortProjectName), which shortens long names to
-       "mhook_in.<guid>") so artifact paths are clean and predictable. -->
   <PropertyGroup>
     <TargetName>mhook_inject_proxy</TargetName>
-    <OutDir>$(SolutionDir)\build\artifacts\mhook_inject_proxy\$(Platform)\$(Configuration)\</OutDir>
-    <IntDir>$(SolutionDir)\build\obj\mhook_inject_proxy\$(Platform)\$(Configuration)\</IntDir>
+    <OutDir>$(SolutionDir)\build\artifacts\$(ProjectName)\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir>$(SolutionDir)\build\obj\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
 
   <ItemDefinitionGroup>

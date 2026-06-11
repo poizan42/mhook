@@ -126,10 +126,10 @@
   <PropertyGroup Label="UserMacros" />
   <!-- Output layout mirrors mhook-test -->
   <PropertyGroup>
-    <OutDir Condition="'$(Platform)'=='Win32'">$(SolutionDir)\build\artifacts\$(ShortProjectName)\$(Platform)\$(Configuration)\</OutDir>
-    <IntDir Condition="'$(Platform)'=='Win32'">$(SolutionDir)\build\obj\$(ShortProjectName)\$(Platform)\$(Configuration)\</IntDir>
-    <OutDir Condition="'$(Platform)'=='x64'">$(SolutionDir)\build\artifacts\$(ShortProjectName)\$(Platform)\$(Configuration)\</OutDir>
-    <IntDir Condition="'$(Platform)'=='x64'">$(SolutionDir)\build\obj\$(ShortProjectName)\$(Platform)\$(Configuration)\</IntDir>
+    <OutDir Condition="'$(Platform)'=='Win32'">$(SolutionDir)\build\artifacts\$(ProjectName)\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir Condition="'$(Platform)'=='Win32'">$(SolutionDir)\build\obj\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
+    <OutDir Condition="'$(Platform)'=='x64'">$(SolutionDir)\build\artifacts\$(ProjectName)\$(Platform)\$(Configuration)\</OutDir>
+    <IntDir Condition="'$(Platform)'=='x64'">$(SolutionDir)\build\obj\$(ProjectName)\$(Platform)\$(Configuration)\</IntDir>
   </PropertyGroup>
   <!-- gtest needs to locate its own internal headers via the src/ directory -->
   <PropertyGroup>
