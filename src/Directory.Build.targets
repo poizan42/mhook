@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Auto-imported by every project under src/ (MSBuild Directory.Build.targets
+     convention).  Shared build logic that more than one project needs lives here. -->
+<Project>
+
+  <!-- Copy the output DLLs (and PDBs) of project references marked
+       <CopyOutputDll>true</CopyOutputDll> into this project's $(OutDir), after build.
+       Used to assemble runtime layouts next to a consumer binary:
+         * mhook-unit-tests  — the companion DLLs it injects/loads at run time;
+         * mhook_inject_proxy — the x64 mhook_inject.dll / mhook.dll bundle (dynamic).
+       A no-op for projects with no CopyOutputDll references.  Only .dll outputs are
+       copied (a reference whose output is a .lib — e.g. a static-config dependency —
+       is skipped), so the same metadata works across static/dynamic configurations. -->
+  <Target Name="CopyProjectReferenceDlls" AfterTargets="Build">
+
+    <!-- Step 1: select references opted in via CopyOutputDll metadata. -->
+    <ItemGroup>
+      <_ProjectRefsToCopy Include="@(ProjectReference)"
+                           Condition="'%(ProjectReference.CopyOutputDll)' == 'true'" />
+    </ItemGroup>
+
+    <!-- Step 2: resolve each reference's primary output for this configuration. -->
+    <MSBuild Projects="@(_ProjectRefsToCopy)"
+             Targets="GetTargetPath"
+             Properties="Configuration=$(Configuration);Platform=$(Platform)"
+             Condition="'@(_ProjectRefsToCopy)' != ''">
+      <Output TaskParameter="TargetOutputs" ItemName="_ReferencedDllPaths" />
+    </MSBuild>
+
+    <!-- Step 3: the .dll outputs, plus the matching .pdb beside each. -->
+    <ItemGroup>
+      <_FilesToCopy Include="@(_ReferencedDllPaths)"
+                    Condition="'%(_ReferencedDllPaths.Extension)' == '.dll'" />
+      <_FilesToCopy Include="@(_ReferencedDllPaths->'%(RootDir)%(Directory)%(Filename).pdb')"
+                    Condition="'%(_ReferencedDllPaths.Extension)' == '.dll'" />
+    </ItemGroup>
+
+    <!-- Step 4: copy the ones that actually exist on disk. -->
+    <Copy SourceFiles="@(_FilesToCopy)"
+          DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true"
+          Condition="Exists('%(_FilesToCopy.RootDir)%(_FilesToCopy.Directory)%(_FilesToCopy.Filename)%(_FilesToCopy.Extension)')" />
+
+  </Target>
+
+</Project>

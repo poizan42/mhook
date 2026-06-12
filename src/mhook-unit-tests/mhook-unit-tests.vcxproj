@@ -372,39 +372,7 @@
     <Import Project="$(VCTargetsPath)\BuildCustomizations\masm.targets" />
   </ImportGroup>
 
-  <!-- Copy DLLs from project references marked with CopyOutputDll=true -->
-  <Target Name="CopyProjectReferenceDlls" AfterTargets="Build">
-
-    <!-- Step 1: Filter using qualified metadata syntax -->
-    <ItemGroup>
-      <_ProjectRefsToCopy Include="@(ProjectReference)"
-                           Condition="'%(ProjectReference.CopyOutputDll)' == 'true'" />
-    </ItemGroup>
-
-    <!-- Step 2: Call GetTargetPath on each filtered reference -->
-    <MSBuild Projects="@(_ProjectRefsToCopy)"
-             Targets="GetTargetPath"
-             Properties="Configuration=$(Configuration);Platform=$(Platform)">
-      <Output TaskParameter="TargetOutputs" ItemName="_ReferencedDllPaths" />
-    </MSBuild>
-
-    <!-- Step 3: Build a list of .dll and .pdb paths -->
-    <ItemGroup>
-      <!-- Include the DLLs themselves -->
-      <_FilesToCopy Include="@(_ReferencedDllPaths)"
-                    Condition="'%(_ReferencedDllPaths.Extension)' == '.dll'" />
-
-      <!-- Derive the .pdb path by replacing .dll with .pdb -->
-      <_FilesToCopy Include="@(_ReferencedDllPaths->'%(RootDir)%(Directory)%(Filename).pdb')"
-                    Condition="'%(_ReferencedDllPaths.Extension)' == '.dll'" />
-    </ItemGroup>
-
-    <!-- Step 4: Copy only files that actually exist on disk -->
-    <Copy SourceFiles="@(_FilesToCopy)"
-          DestinationFolder="$(OutDir)"
-          SkipUnchangedFiles="true"
-          Condition="Exists('%(_FilesToCopy.RootDir)%(_FilesToCopy.Directory)%(_FilesToCopy.Filename)%(_FilesToCopy.Extension)')"
-  />
-
-  </Target>
+  <!-- The companion DLLs this test injects/loads at run time are copied next to the
+       test exe by the shared CopyProjectReferenceDlls target (src/Directory.Build.targets),
+       driven by the <CopyOutputDll>true</CopyOutputDll> metadata on the references above. -->
 </Project>

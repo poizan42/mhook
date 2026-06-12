@@ -110,15 +110,24 @@
        static configs link the static mhook_inject.lib / mhook.lib (self-contained);
        dynamic configs link the import libs (import mhook_inject.dll). -->
   <ItemGroup>
+    <!-- CopyOutputDll (x64): the dynamic configs produce mhook_inject.dll, which the
+         shared CopyProjectReferenceDlls target copies next to the exe to form the
+         self-contained x64 bundle.  Static configs produce a .lib (no .dll), so nothing
+         is copied there — the static proxy is a single self-contained exe. -->
     <ProjectReference Include="..\mhook-inject\mhook_inject.vcxproj">
       <Project>{A3B7C2D1-5E4F-4A9B-8C3D-2F1E6A0B7C94}</Project>
+      <CopyOutputDll Condition="'$(Platform)'=='x64'">true</CopyOutputDll>
     </ProjectReference>
-    <!-- mhook.lib is only linked into the self-contained STATIC proxy (for
-         inject_entry.c's Mhook_SetHook/Unhook).  The dynamic proxy doesn't import
-         mhook.dll — the target loads it via MhookDllPath. -->
-    <ProjectReference Include="..\libmhook.vcxproj"
-                      Condition="'$(Configuration)'=='Debug' or '$(Configuration)'=='Release'">
+    <!-- libmhook: STATIC configs link mhook.lib (for inject_entry.c's Mhook_SetHook/
+         Unhook in the self-contained exe).  DYNAMIC configs reference it build-order
+         only (LinkLibraryDependencies=false — the proxy must not import mhook.dll), and
+         CopyOutputDll bundles the built mhook.dll next to the exe (the target loads it
+         via MhookDllPath).  Referencing it also guarantees mhook.dll is built even in a
+         standalone, non-solution proxy build. -->
+    <ProjectReference Include="..\libmhook.vcxproj">
       <Project>{9AF4E83D-3670-44C8-84B9-54FFD4AFFF21}</Project>
+      <LinkLibraryDependencies Condition="'$(Configuration)'=='DebugDynamic' or '$(Configuration)'=='ReleaseDynamic'">false</LinkLibraryDependencies>
+      <CopyOutputDll Condition="'$(Platform)'=='x64'">true</CopyOutputDll>
     </ProjectReference>
     <ProjectReference Include="..\ntdll_extra_stub\ntdll_extra_stub.vcxproj">
       <Project>{B1E3F8C2-4A5D-4F9E-8B2C-1D6E7A3F9B04}</Project>
@@ -127,21 +136,7 @@
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 
-  <!-- Dynamic configs: assemble the self-contained x64 bundle by copying the x64
-       mhook_inject.dll + mhook.dll (which the proxy imports / the target loads) next to
-       the exe.  Exists-guarded so a partial build doesn't fail. -->
-  <Target Name="CopyProxyRuntimeDlls"
-          AfterTargets="Build"
-          Condition="'$(Platform)'=='x64' and ('$(Configuration)'=='DebugDynamic' or '$(Configuration)'=='ReleaseDynamic')">
-    <ItemGroup>
-      <_ProxyBundleDll Include="$(SolutionDir)build\artifacts\mhook_inject\x64\$(Configuration)\mhook_inject.dll" />
-      <_ProxyBundleDll Include="$(SolutionDir)build\artifacts\mhook_inject\x64\$(Configuration)\mhook_inject.pdb" />
-      <_ProxyBundleDll Include="$(SolutionDir)build\artifacts\libmhook\x64\$(Configuration)\mhook.dll" />
-      <_ProxyBundleDll Include="$(SolutionDir)build\artifacts\libmhook\x64\$(Configuration)\mhook.pdb" />
-    </ItemGroup>
-    <Copy SourceFiles="@(_ProxyBundleDll)"
-          DestinationFolder="$(OutDir)"
-          SkipUnchangedFiles="true"
-          Condition="Exists('%(_ProxyBundleDll.FullPath)')" />
-  </Target>
+  <!-- The dynamic bundle (mhook_inject.dll + mhook.dll next to the exe) is assembled by
+       the shared CopyProjectReferenceDlls target (src/Directory.Build.targets) from the
+       CopyOutputDll references above. -->
 </Project>
